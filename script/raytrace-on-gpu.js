@@ -222,7 +222,7 @@ void main(){
 		vec3 dstNormal1 = normalize(dstNormal);
 			
 		// load normal map and apply it
-		if(false && dot(tint,tint) > 0.0){
+		if(dot(tint,tint) > 0.0){
 			
 			vec4 srcTangent = 
 				texelFetch(tanTex,uv0,0) * weights.x + 
@@ -233,12 +233,12 @@ void main(){
 			srcTangent1 -= srcNormal * dot(srcNormal,srcTangent1);
 			if(dot(srcTangent1,srcTangent1)>0.0) srcTangent1.xyz = normalize(srcTangent1);
 			
-			vec3 srcBitangent = sign(srcTangent.w) * cross(srcTangent1,srcNormal);
+			vec3 srcBitangent = sign(srcTangent.w) * cross(srcNormal,srcTangent1);
 			if(dot(srcBitangent,srcBitangent)>0.0) srcBitangent = normalize(srcBitangent);
 			
 			vec3 srcNormalMap = (texture(dataTex,srcUV,0.0).xyz*2.0-1.0) * tint.xyz;
 			srcNormalMap = normalize(srcNormalMap);
-			srcNormal = mat3(-srcBitangent,-srcTangent1,srcNormal) * srcNormalMap;
+			srcNormal = mat3(srcTangent1,srcBitangent,srcNormal) * srcNormalMap;
 		}
 		
 		// transform srcNormal into tangent space
@@ -246,13 +246,18 @@ void main(){
 		dstTangent1 -= dstNormal1 * dot(dstNormal1,dstTangent1);
 		if(dot(dstTangent1,dstTangent1)>0.0) dstTangent1=normalize(dstTangent1);
 		
-		vec3 dstBitangent = sign(dstTangent.w) * cross(dstTangent1,dstNormal1);
+		vec3 dstBitangent = sign(dstTangent.w) * cross(dstNormal1,dstTangent1);
 		if(dot(dstBitangent,dstBitangent)>0.0) dstBitangent=normalize(dstBitangent);
 		
-		srcNormal = srcNormal * mat3(-dstBitangent,-dstTangent1,dstNormal1);
+		srcNormal = srcNormal * mat3(dstTangent1,dstBitangent,dstNormal1);
 		float l2 = dot(srcNormal,srcNormal);
 		result.xyz = l2>0.0 ? (srcNormal)/sqrt(l2)*.5+.5 : vec3(0.5,0.5,1.0);
 		result.a = 1.0;
+		
+		// result.xyz = vec3(1.0-5.0*far*depthScale.x);
+		// result.xyz = fract(dstCoord);
+		// result.xyz = normalize(dstTangent.xyz)*.5+.5;
+		// result.xyz = normalize(dstBitangent)*.5+.5;
 		
 	} else {
 		result = texture(dataTex,srcUV,0.0) * tint;
@@ -263,9 +268,6 @@ void main(){
 			result.rgb = max(1.0549 * pow(result.rgb,vec3(1.0/2.4)) - 0.0549, 0.0);
 		}
 	}
-	
-	// result.xyz = vec3(1.0-far*depthScale.x);
-	
 }`)
 }
 
@@ -330,6 +332,23 @@ function bindBuffer(ptr,dim,buffer){
 	}
 }
 
+function calcMaxDistance(src){
+	// calculate maximum ray-depth by total bounds
+	let bounds = [1e38,1e38,1e38,-1e38,-1e38,-1e38]
+	src.forEach(srci => {
+		let box = srci[1].boundingBox
+		let min = box.min, max = box.max
+		bounds[0] = Math.min(bounds[0],min.x)
+		bounds[1] = Math.min(bounds[1],min.y)
+		bounds[2] = Math.min(bounds[2],min.z)
+		bounds[3] = Math.max(bounds[3],max.x)
+		bounds[4] = Math.max(bounds[4],max.y)
+		bounds[5] = Math.max(bounds[5],max.z)
+	})
+	let dx = bounds[3]-bounds[0], dy = bounds[4]-bounds[1], dz = bounds[5]-bounds[2]
+	return Math.sqrt(dx*dx+dy*dy+dz*dz)
+}
+
 function raytraceOnGPU(glw,glh,src,dst,materials) {
 	
 	gl.clearColor(0,0,0,0)
@@ -368,22 +387,8 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 	// gl.enable(gl.DEPTH_TEST)
 	gl.depthFunc(gl.LESS)
 	
-	// todo calculate maximum ray-depth by total bounds
-	let bounds = [1e38,1e38,1e38,-1e38,-1e38,-1e38]
-	src.forEach(srci => {
-		let box = srci[1].boundingBox
-		let min = box.min, max = box.max
-		bounds[0] = Math.min(bounds[0],min.x)
-		bounds[1] = Math.min(bounds[1],min.y)
-		bounds[2] = Math.min(bounds[2],min.z)
-		bounds[3] = Math.max(bounds[3],max.x)
-		bounds[4] = Math.max(bounds[4],max.y)
-		bounds[5] = Math.max(bounds[5],max.z)
-	})
-	// console.log('bounds:', bounds)
-	let dx = bounds[3]-bounds[0], dy = bounds[4]-bounds[1], dz = bounds[5]-bounds[2]
-	let maxDistance = Math.sqrt(dx*dx+dy*dy+dz*dz)
-	// console.log(src, maxDistance)
+	let maxDistance = calcMaxDistance(src)
+	console.log('max distance:', maxDistance)
 	
 	let fb0 = createFramebuffer(glw,glh,true)
 	let fb1 = createFramebuffer(glw,glh,false)
@@ -423,8 +428,7 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 		let uvsBuffer = createBuffer(dstData.UVSs)
 		let tanBuffer = isNormalMap ? createBuffer(dstData.TANs) : null
 		let length = dstData.POSs.length/3
-		console.log('dsti', length)
-		return {posBuffer,norBuffer,uvsBuffer,tanBuffer,length}
+		return { posBuffer, norBuffer, uvsBuffer, tanBuffer, length }
 	})
 	
 	console.log('rendering', src.length, 'x', dst.length)
@@ -505,22 +509,21 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 		let mat = materials[srcIndex]
 		let dataTex = (mat && mat.image) ? createTexture(mat.image) : whiteTex
 		
-		console.log('srci', srcLength)
-		
-		bindTex(dataTex,'dataTex', 5)
-		bindTex(blasTex,'blasTex',0)
-		bindTex(posTex, 'posTex', 1)
-		bindTex(norTex, 'norTex', 2)
-		bindTex(uvsTex, 'uvsTex', 3)
-		bindTex(tanTex, 'tanTex', 4)
-		
-		console.log('material:', mat)
+		bindTex(blasTex, 'blasTex', 0)
+		bindTex(posTex,  'posTex',  1)
+		bindTex(norTex,  'norTex',  2)
+		bindTex(uvsTex,  'uvsTex',  3)
+		bindTex(tanTex,  'tanTex',  4)
+		bindTex(dataTex, 'dataTex', 5)
 		
 		let ch = layer.channel
-		if(!isNormalMap || (mat && mat.image))
+		if(!isNormalMap || (mat && mat.image)) {
+			console.log('tint:', mat.tint)
 			gl.uniform4f(gl.getUniformLocation(rtShader,'tint'),mat.tint[0],mat.tint[1],mat.tint[2],mat.tint[3])
-		else
+		} else {
+			console.log('tint: 0')
 			gl.uniform4f(gl.getUniformLocation(rtShader,'tint'),0,0,0,0)
+		}
 		
 		gl.uniform4f(gl.getUniformLocation(rtShader,'channelMask'),ch==0?1:0,ch==1?1:0,ch==2?1:0,ch==3?1:0)
 		gl.uniform1i(gl.getUniformLocation(rtShader,'isSingleChannel'),ch !== undefined ? 1 : 0)
@@ -679,7 +682,7 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 		gl.uniform2f(gl.getUniformLocation(spreadShader,'duv'), spreadFactor/glw,spreadFactor/glh)
 		bindBuffer(gl.getAttribLocation(spreadShader,'uvs'),2,flatBuffer)
 		
-		let maxIterations = spreadFactor == 1 ? glw / 2.5 : glw / 4
+		let maxIterations = 1//spreadFactor == 1 ? glw / 2.5 : glw / 4
 		let testPeriod = Math.min(64, maxIterations)
 		let testMask = testPeriod-1
 		maxIterations -= maxIterations % testPeriod

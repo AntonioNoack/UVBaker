@@ -4,6 +4,10 @@ import { mergeGeometry, calculateTangents } from 'script/geometry.js'
 import { buildBLAS, trace, volume, RAY_ABCI, RAY_DISTANCE, RAY_SCORE, RAY_UVW } from 'script/rtas.js'
 import { finishTexture } from 'script/utils.js'
 
+function fract(x){
+	return x-Math.floor(x)
+}
+
 function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTime) {
 	
 	const isNormalMap = !!layer.isNormalMap
@@ -33,7 +37,8 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 	
 	console.log(-lastTime+(lastTime=Date.now()), 'building BLAS')
 	
-	const maxDelta = 0.25 * Math.pow(volume(bounds), 1/3)
+	let dx = bounds[3]-bounds[0], dy = bounds[4]-bounds[1], dz = bounds[5]-bounds[2]
+	const maxDistance = Math.sqrt(dx*dx+dy*dy+dz*dz)
 	
 	// rasterize all destination triangles
 	const s4 = w*h*4
@@ -58,6 +63,8 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 			const dstI = dst[dstGeoIdx]
 			const TRANSd = dstI[0].elements
 			const GEOd = dstI[1]
+			
+			console.log('TRANSd:', TRANSd)
 			
 			let POSd = GEOd.attributes.position
 			let NORd = GEOd.attributes.normal
@@ -162,14 +169,14 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 								ray[6] = clamp(1.0/ray[3], -1e38, 1e38)
 								ray[7] = clamp(1.0/ray[4], -1e38, 1e38)
 								ray[8] = clamp(1.0/ray[5], -1e38, 1e38)
-								ray[RAY_SCORE] = maxDelta
+								ray[RAY_SCORE] = maxDistance
 								
 								// raytrace
 								window.printTrace = false // x == 4 && y == 0
 								trace(tris,root,ray)
 								
 								const dist = ray[RAY_SCORE]
-								const hit = dist < maxDelta
+								const hit = dist < maxDistance
 								if(printTrace) console.log('tracing', x, y, {'origin': [ray[0],ray[1],ray[2]],'dir': [ray[3],ray[4],ray[5]], 'hit': hit})
 								
 								if(hit) {
@@ -251,23 +258,23 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 										let ny3 = nx2*bx0 + ny2*by0 + nz2*bz0
 										let nz3 = nx2*nx0 + ny2*ny0 + nz2*nz0
 										
-										if(0){
-											// position debug
-											image[q  ] = 255 * (px - bounds[0]) / (bounds[3]-bounds[0])
-											image[q+1] = 255 * (py - bounds[1]) / (bounds[4]-bounds[1])
-											image[q+2] = 255 * (pz - bounds[2]) / (bounds[5]-bounds[2])
-										} else if(0){
-											// distance debug
-											image[q  ] = 255 * Math.abs(ray[RAY_DISTANCE]) / maxDelta
-											image[q+1] = dist < 0 ? 0 : image[q]
-											image[q+2] = dist < 0 ? 0 : image[q]
-										} else {
-											// normals [hopefully tangent space]
-											const inv = 127/Math.sqrt(nx3*nx3 + ny3*ny3 + nz3*nz3)
-											image[q  ] = nx3*inv+127
-											image[q+1] = ny3*inv+127
-											image[q+2] = nz3*inv+127
-										}
+										// normals [dst tangent space]
+										// nx3 = nx; ny3 = ny; nz3 = nz; // debug!!, [world space]
+										// nx3 = tx0; ny3 = ty0; nz3 = tz0; // debug!!, [dst tangent, object space]
+										// nx3 = bx0; ny3 = by0; nz3 = bz0; // debug!! [dst bitangent, object space]
+										const inv = 127/Math.sqrt(nx3*nx3 + ny3*ny3 + nz3*nz3)
+										image[q  ] = nx3*inv+127
+										image[q+1] = ny3*inv+127
+										image[q+2] = nz3*inv+127
+										
+										/*image[q  ] = fract(px)*255;
+										image[q+1] = fract(py)*255;
+										image[q+2] = fract(pz)*255;*/
+										
+										/*image[q  ] = Math.max(1.0-5.0*dist/maxDistance,0)*255;
+										image[q+1] = image[q];
+										image[q+2] = image[q];*/
+										
 									} else {
 										if(material){
 											const color = material(srcU,srcV)
@@ -312,6 +319,7 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 		if(session != thisSession) return;
 		let done = true
 		let t0 = Date.now()
+		const debugDisableSpreading = true
 		for(let z=0;z<16;z++) {
 			done = true
 			for(let y=0,i4=0;y<h;y++){
@@ -329,7 +337,7 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 						if(d1 && d2 && image0[j4+5]) { q++; r += image0[j4+4]; g += image0[j4+5]; b += image0[j4+6]; } // +x-y
 						if(d0 && d3 && image0[k4-1]) { q++; r += image0[k4-4]; g += image0[k4-3]; b += image0[k4-2]; } // -x+y
 						if(d1 && d3 && image0[k4+5]) { q++; r += image0[k4+4]; g += image0[k4+5]; b += image0[k4+6]; } // +x+y
-						if(q){
+						if(q && !debugDisableSpreading){
 							image1[i4  ] = r/q
 							image1[i4+1] = g/q
 							image1[i4+2] = b/q
@@ -349,6 +357,10 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 			let tmp = image1
 			image1 = image0
 			image0 = tmp
+			
+			if(debugDisableSpreading){
+				done = true
+			}
 			
 			let dt = Date.now() - t0
 			if(spreadI++ > w) done = true;
