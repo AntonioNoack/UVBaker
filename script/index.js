@@ -5,10 +5,7 @@
 import * as THREE from 'three'
 import { Loader } from 'script/mesh-loader.js'
 import { loadMaterials } from 'script/loader.js'
-import { mergeGeometry, calculateTangents } from 'script/geometry.js'
-import { buildBLAS, volume, trace, RAY_SCORE, RAY_ABCI, RAY_UVW } from 'script/rtas.js'
-import { random, clamp, mix2d } from 'script/maths.js'
-import { create, splitByMaterial, collectData, camSetup, loadReflectionMap } from 'script/scene.js'
+import { create, collectData, camSetup, loadReflectionMap } from 'script/scene.js'
 import { raytraceOnCPU } from 'script/raytrace-on-cpu.js'
 import { raytraceOnGPU, prepareGPU } from 'script/raytrace-on-gpu.js'
 import { finishTexture } from 'script/utils.js'
@@ -53,6 +50,7 @@ function process(scene,i){
 }
 
 function animate() {
+	// todo can we make this only render when we need it?
 	requestAnimationFrame(animate)
 	for(let i=0;i<renderers.length;i++){
 		renderers[i].render(scenes[i], cameras[i])
@@ -116,7 +114,6 @@ for(let i=0;i<layers.length;i++) {
 	layersUI.appendChild(e)
 }
 
-let renderer = new THREE.WebGLRenderer()
 window.session = 0
 
 let startTime = 0
@@ -130,11 +127,6 @@ function bake(){
 		matList = materials
 		bake1(materials,thisSession)
 	})
-}
-
-const linearToSRGB = new Uint8ClampedArray(256)
-for(let i=0;i<256;i++){
-	linearToSRGB[i] = Math.max(269 * Math.pow(i/255, 1.0/2.4) - 14, 0);
 }
 
 window.blas = null
@@ -199,11 +191,10 @@ resetButton.onclick = () => {
 
 new Loader((s) => process(s,0)).loadPath(file0)
 new Loader((s) => process(s,1)).loadPath(file1)
-window.THREE = THREE
 
 loadReflectionMap(scenes)
 
-if(useGPU){
+if(useGPU) {
 	prepareGPU()
 }
 

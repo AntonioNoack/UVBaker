@@ -1,7 +1,9 @@
 
 import { clamp, mix2d } from 'script/maths.js'
+import * as THREE from 'three'
 
 const images = {}
+const renderer = new THREE.WebGLRenderer()
 
 function loadImage(map){
 	
@@ -37,7 +39,7 @@ function loadImage(map){
 		resCanvas1.width = width
 		resCanvas1.height = height
 		resCtx1.putImageData(new ImageData(data,width,height),0,0)
-		image = {width,height,data}
+		image = {width,height,data,flipY:map.flipY}
 		// throw 'see image '+maps[i]+' for '+material.name + ' ' + w+'x'+h
 	} else {
 		image = null
@@ -134,6 +136,7 @@ function loadMaterials(materials,k,thisSession,callback){
 					const w = image.width, h = image.height
 					u -= Math.floor(u)
 					v -= Math.floor(v)
+					// if(!image.flipY) { v = 1-v; }
 					const x = u*w-0.5
 					const y = v*h-0.5
 					const x0 = Math.min(x|0,w-1), y0 = Math.min(y|0,h-1), fx = x-x0, fy=y-y0

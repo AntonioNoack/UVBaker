@@ -1,8 +1,9 @@
 
+import * as THREE from 'three'
+
 function finishTexture(imageData){
 	const texture = new THREE.Texture(imageData)
 	texture.needsUpdate = true
-	console.log('applying', texture, 'to', displayMat0, displayMat1, '.', layer.display0, layer.display1)
 	displayMat0[layer.display0] = texture
 	displayMat1[layer.display1] = texture
 	if(layer.display0 == 'emissiveMap') {

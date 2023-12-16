@@ -5,8 +5,6 @@ import { EffectComposer } from 'three/postprocessing/EffectComposer.js'
 import { TAARenderPass } from 'three/postprocessing/TAARenderPass.js'
 import { Loader } from 'script/mesh-loader.js'
 
-window.THREE = THREE
-
 function create(div,idx,extra){
 	
 	const models = []

@@ -1,5 +1,5 @@
 
-import { clamp } from 'script/maths.js'
+import { clamp, linearToSRGB } from 'script/maths.js'
 import { mergeGeometry, calculateTangents } from 'script/geometry.js'
 import { buildBLAS, trace, volume, RAY_ABCI, RAY_DISTANCE, RAY_SCORE, RAY_UVW } from 'script/rtas.js'
 import { finishTexture } from 'script/utils.js'

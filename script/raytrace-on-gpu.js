@@ -332,9 +332,6 @@ function bindBuffer(ptr,dim,buffer){
 
 function raytraceOnGPU(glw,glh,src,dst,materials) {
 	
-	resCanvas2.width = glw
-	resCanvas2.height = glh
-	
 	gl.clearColor(0,0,0,0)
 	gl.clearDepth(1.0)
 

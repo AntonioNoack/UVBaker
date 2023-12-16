@@ -24,4 +24,9 @@ function mix2d(v00,v01,v10,v11,fx,fy){
 	return (v00*gy+fy*v01)*gx+fx*(v10*gy+fy*v11)
 }
 
-export { random, clamp, mix2d };
+const linearToSRGB = new Uint8ClampedArray(256)
+for(let i=0;i<256;i++){
+	linearToSRGB[i] = Math.max(269 * Math.pow(i/255, 1.0/2.4) - 14, 0);
+}
+
+export { random, clamp, mix2d, linearToSRGB };
