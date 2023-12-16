@@ -1,0 +1,152 @@
+* {
+    font-family: 'Times New Roman', serif;
+}
+body {
+    margin: 0;
+    overflow-x: hidden;
+    background-image: url('img/bg.jpg');
+    background-repeat: repeat;
+}
+.display {
+    width: 32.6vw;
+    height: 100%;
+    position: absolute;
+    top: 0px;
+    margin: 0;
+    padding: 0;
+}
+.title-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.title {
+    font-size: 2rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5em;
+    padding: 0.3em;
+    margin: 0.5em 0em 0.3em 0em;
+    padding: 0.2em 0.2em 0.2em 0.9em;
+    border-radius: 0.2em;
+    box-shadow: 1px 2px 2px 0px #888;
+    background: #fff;
+}
+/* todo: flexbox for alignment? */
+.select-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.select-title {
+    font-size: 1.1em;
+    text-transform: uppercase;
+    padding: 0.3em;
+    border-radius: 0.2em;
+    box-shadow: 1px 2px 2px 0px #888;
+    padding: 0.3em 0.3em 0.3em 0.7em;
+    margin: 0em 0.3em 0em 1em;
+    background: #fff;
+}
+.select-box {
+    font-size: 1.1em;
+    font-weight: 300;
+    padding: 0.3em;
+    border-radius: 0.2em;
+    box-shadow: 1px 2px 2px 0px #888;
+    border: 0px black;
+    cursor: pointer;
+}
+.select-box:hover {
+    background: #ddd;
+}
+.button {
+    cursor: pointer;
+    margin: 0.5em 0.35em 0.5em 0.35em;
+    font-size: 1.2em;
+    text-transform: uppercase;
+    box-shadow: 1px 2px 2px 0px #888;
+    background: #fff;
+    border-radius: 0.2em;
+    padding: 0.3em 0.3em 0.3em 0.5em;
+    border: 0px black;
+    transition: 0.1s;
+}
+.button:hover {
+    background: #ddd;
+}
+.button:active {
+    background: #bbb;
+}
+.title-hov {
+    cursor: pointer;
+    transition: 0.1s;
+}
+.title-hov:hover {
+    background: #ddd;
+}
+.title-hov:active {
+    background: #bbb;
+}
+
+/* The switch - the box around the slider */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 34px;
+}
+
+/* Hide default HTML checkbox */
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* The slider */
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 26px;
+  width: 26px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2196F3;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #2196F3;
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(26px);
+  -ms-transform: translateX(26px);
+  transform: translateX(26px);
+}
+
+/* Rounded sliders */
+.slider.round {
+  border-radius: 34px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
