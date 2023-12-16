@@ -45,17 +45,25 @@
 		</div>
 		<hr>
 		<div class="select-container">
-			<label  style="display:none;" class="select-title" style="text-transform: none" for="shaders">Processor:</label>
+			<label class="select-title" style="text-transform: none" for="shaders">Device:</label>
 			<select class="select-box" name="shaders" id="processorUI">
-				<option selected value="1">CPU</option>
-				<option value="0">GPU (normals broken)</option>
+				<option value="1">CPU</option>
+				<option selected value="0">GPU</option>
 			</select>&nbsp;&nbsp;
 			<button class="button" id="resetButton">Delete Textures</button>
 		</div>
 		<hr>
 		<div class="select-container">
 			<label  class="select-title" for="layers">Layer:</label>
-			<select class="select-box" name="layers" id="layersUI" value="Normals"></select>
+			<select class="select-box" name="layers" id="layersUI" value="Normals">
+				<option selected value="0">Normals</option>
+				<option value="1">Diffuse</option>
+				<option value="2">Emissive</option>
+				<option value="3">Roughness</option>
+				<option value="4">Metallic</option>
+				<option value="5">AO Copied</option>
+				<option value="6">AO Computed</option>
+			</select>
 			<label  class="select-title" for="resolutions">Resolution:</label>
 			<select class="select-box" name="resolutions" id="resolutionUI">
 				<option selected value="256">256 px</option>
@@ -65,6 +73,20 @@
 				<option value="4096">4096 px</option>
 			</select>
 		</div>
+			<div id="sampleUIContainer" style="display:none;margin-top: 0.4em;" class="select-container">
+				<label  class="select-title" for="samples">Samples:</label>
+				<select class="select-box" name="samples" id="sampleUI">
+					<option selected value="32">32</option>
+					<option value="64">64</option>
+					<option value="128">128</option>
+					<option value="256">256</option>
+					<option value="512">512</option>
+					<option value="1024">1024</option>
+					<option value="2048">2048</option>
+					<option value="4096">4096</option>
+				</select>
+			</div>
+		<hr>
 		<div class="select-container">
 			<button class="button" id="exeButton">Calculate</button>
 			<button class="button" id="cancelButton">Cancel</button>

@@ -163,8 +163,7 @@ function safeMax(x,y){
 	return x>y?x:y
 }
 
-window.printTrace = false
-function aabbHitsRay(b,ray) {
+function aabbHitsRayGeneral(b,ray,minZ,maxZ) {
 	// return true;
 	const rx = ray[0], ry = ray[1], rz = ray[2]
 	const rdx = ray[6], rdy = ray[7], rdz = ray[8]
@@ -177,16 +176,23 @@ function aabbHitsRay(b,ray) {
 	const nearX = safeMin(sx0, sx1)
 	const nearY = safeMin(sy0, sy1)
 	const nearZ = safeMin(sz0, sz1)
-	const near  = safeMax(safeMax(nearX, nearY), safeMax(nearZ, -ray[9]))
+	const near  = safeMax(safeMax(nearX, nearY), safeMax(nearZ, minZ))
 	const farX = safeMax(sx0, sx1)
 	const farY = safeMax(sy0, sy1)
 	const farZ = safeMax(sz0, sz1)
 	const far  = safeMin(farX, safeMin(farY, farZ))
-	// if(printTrace) console.log(sx0,sx1,sy0,sy1,sz0,sz1,'->',nearX,farX,nearY,farY,nearZ,farZ,'->',near,far,'-',ray[9],'>',far >= near,'&&',near < ray[9])
-	return far >= near && near < ray[9]
+	return far >= near && near < maxZ
 }
 
-function triHitsRay(ai3,bi3,ci3,ray){
+function aabbHitsRay(b,ray) {
+	return aabbHitsRayGeneral(b,ray,-ray[9],ray[9])
+}
+
+function aabbHitsRaySigned(b,ray) {
+	return aabbHitsRayGeneral(b,ray,0.0,ray[9])
+}
+
+function triHitsRay(ai3,bi3,ci3,ray,allowNegative){
 	
 	const pos = window.POSs
 	const ax = pos[ai3], ay = pos[ai3+1], az = pos[ai3+2]
@@ -206,7 +212,8 @@ function triHitsRay(ai3,bi3,ci3,ray){
 	const norXdir = nx*ray[RAY_DIR] + ny*ray[RAY_DIR+1] + nz*ray[RAY_DIR+2]
 	if(norXdir < 0.0) return; // back-side
 	const distance = (dist - (nx*ray[RAY_ORIGIN] + ny*ray[RAY_ORIGIN+1] + nz*ray[RAY_ORIGIN+2])) / norXdir
-	const score = Math.abs(distance)// * (1+(norXdir)/Math.sqrt(nx*nx+ny*ny+nz*nz))
+	if(distance < 0.0 && !allowNegative) return; // behind us
+	const score = Math.abs(distance)
 	if (score < ray[RAY_SCORE]) {
 	
 		// dstPosition = origin + distance * direction
@@ -249,7 +256,6 @@ function trace(tris,node,ray){
 			// with split dimension, has children
 			// decide order based on ray-dir and dim
 			const dim = node[3]
-			// if(printTrace) console.log('Split',dim)
 			if(ray[3+dim] > 0.0){
 				trace(tris,node[1],ray)
 				trace(tris,node[2],ray)
@@ -259,15 +265,37 @@ function trace(tris,node,ray){
 			}
 		} else {
 			const start = node[1], end = node[2]
-			if(printTrace) console.log('Tris', start, end)
 			for(let i=start;i<end;i++){
 				const tri = tris[i]
 				const ai = tri[TRIS_ABC_IDX], bi = tri[TRIS_ABC_IDX+1], ci = tri[TRIS_ABC_IDX+2]
-				// if(printTrace) console.log('Tri', ai, bi, ci)
-				triHitsRay(ai*3,bi*3,ci*3,ray)
+				triHitsRay(ai*3,bi*3,ci*3,ray,true)
 			}
 		}
-	} else if(printTrace) console.log('Missed AABB')
+	}
 }
 
-export { trace, buildBLAS, maxNodeSize, volume, RAY_SCORE, RAY_ABCI, RAY_UVW, RAY_DISTANCE, TRIS_ABC_IDX };
+function traceSigned(tris,node,ray){
+	if(aabbHitsRaySigned(node[0],ray)){
+		if(node.length == 4){
+			// with split dimension, has children
+			// decide order based on ray-dir and dim
+			const dim = node[3]
+			if(ray[3+dim] > 0.0){
+				traceSigned(tris,node[1],ray)
+				traceSigned(tris,node[2],ray)
+			} else {
+				traceSigned(tris,node[2],ray)
+				traceSigned(tris,node[1],ray)
+			}
+		} else {
+			const start = node[1], end = node[2]
+			for(let i=start;i<end;i++){
+				const tri = tris[i]
+				const ai = tri[TRIS_ABC_IDX], bi = tri[TRIS_ABC_IDX+1], ci = tri[TRIS_ABC_IDX+2]
+				triHitsRay(ai*3,bi*3,ci*3,ray,false)
+			}
+		}
+	}
+}
+
+export { trace, traceSigned, buildBLAS, maxNodeSize, volume, RAY_SCORE, RAY_ABCI, RAY_UVW, RAY_DISTANCE, TRIS_ABC_IDX };

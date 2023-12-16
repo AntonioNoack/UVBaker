@@ -33,7 +33,6 @@ void main(){
 	result = clamp(texture(tex0,uv),vec4(0.0),vec4(1.0));
 }`)
 	flatLoc = gl.getAttribLocation(flatShader,'uvs')
-	
 	spreadShader = createProgram(`
 in vec2 uvs;
 out vec2 uv;
@@ -75,25 +74,15 @@ void main(){
 }`, `
 precision highp float;
 precision highp int;
+
 in vec3 dstCoord, dstNormal;
 in vec4 dstTangent;
 in vec2 dstUV;
-/*uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex7;
-vec4 texById(vec2 uv, int id){
-	switch(id){
-	case 0: return texture(tex0,uv,0.0);
-	case 1: return texture(tex1,uv,0.0);
-	case 2: return texture(tex2,uv,0.0);
-	case 3: return texture(tex3,uv,0.0);
-	case 4: return texture(tex4,uv,0.0);
-	case 5: return texture(tex5,uv,0.0);
-	case 6: return texture(tex6,uv,0.0);
-	case 7: return texture(tex7,uv,0.0);
-	default: return vec4(1.0);
-	}
-}*/
-vec3 rd, dir;
+out vec4 result;
+
+vec3 pos, rd, dir;
 float far;
+
 float safe(float a, float b){ return a < b || a > b ? a : b; }
 float safeMin(float a, float b){ return a < b ? a : b; }
 float safeMax(float a, float b){ return a > b ? a : b; }
@@ -105,8 +94,8 @@ bool aabbHitsRay(vec3 bMin, vec3 bMax){
 	bvec3 neg   = lessThan(rd, vec3(0.0));
 	vec3  close = mix(bMin,bMax,neg);
 	vec3  far3  = mix(bMax,bMin,neg);
-	float tMin  = maxComp((close-dstCoord)*rd);
-	float tMax  = minComp((far3-dstCoord)*rd);
+	float tMin  = maxComp((close-pos)*rd);
+	float tMax  = minComp((far3-pos)*rd);
 	return max(tMin, -far) <= min(tMax, far);
 }
 float pointInOrOn(vec3 p1, vec3 p2, vec3 a, vec3 b){
@@ -119,8 +108,8 @@ bool intersectTriangle(vec3 p0, vec3 p1, vec3 p2, inout vec3 weights){
 	vec3 N = cross(p1-p0, p2-p0);
 	float dnn = dot(dir, N);
 	if(dnn <= 0.0) return false;
-	float distance = dot(p0-dstCoord, N) / dnn;
-	vec3 px = dstCoord + dir * distance;
+	float distance = dot(p0-pos, N) / dnn;
+	vec3 px = pos + dir * distance;
 	distance = abs(distance);
 	if(distance < far){
 		float w0 = pointInOrOn(px, p0, p1, p2);
@@ -134,28 +123,33 @@ bool intersectTriangle(vec3 p0, vec3 p1, vec3 p2, inout vec3 weights){
 	}
 	return false;
 }
+
 uniform bool isSingleChannel, isNormalMap, isColor;
 uniform vec4 channelMask;
 uniform vec4 tint;
-uniform sampler2D dataTex;
-uniform sampler2D posTex, blasTex, norTex, uvsTex, tanTex;
 uniform uint numTris, numNodes;
 uniform vec2 depthScale;
-out vec4 result;
-void main(){
-	// ray: dstCoord, dstNormal
-	// max-dist?
-	dir = normalize(dstNormal);
+
+uniform sampler2D dataTex;
+uniform sampler2D posTex, blasTex, norTex, uvsTex, tanTex;
+
+void trace(vec3 pos0, vec3 dir0, out ivec2 bestXY, out vec3 weights) {
+	
+	pos = pos0;
+	dir = dir0;
 	rd = 1.0 / dir;
 	far = depthScale.y;
+	
 	uint nodeIndex = 0u;
 	uint stackIndex = 0u;
 	uint nextNodeStack[64];
 	uint k = 0u;
 	uint triTexSize  = uint(textureSize(posTex, 0).x);
 	uint nodeTexSize = uint(textureSize(blasTex,0).x);
-	vec3 weights = vec3(0.1);
-	uint bestX = 0u, bestY = 0u;
+	
+	weights = vec3(0.333);
+	bestXY = ivec2(0);
+	
 	// traverse scene
 	while(k++ < 512u){
 		uint pixelIndex = nodeIndex * 2u;
@@ -185,7 +179,7 @@ void main(){
 					vec3 p1 = texelFetch(posTex,uv1,0).xyz;
 					vec3 p2 = texelFetch(posTex,uv2,0).xyz;
 					if(intersectTriangle(p0, p1, p2, weights)){
-						bestX = triX; bestY = triY;
+						bestXY = ivec2(triX, triY);
 					}
 					triX += 3u;
 					if(triX >= triTexSize){
@@ -200,11 +194,20 @@ void main(){
 			nodeIndex = nextNodeStack[--stackIndex];
 		}
 	}
+}
+
+void main(){
+	
+	ivec2 bestXY;
+	vec3 weights;
+	
+	trace(dstCoord, normalize(dstNormal), bestXY, weights);
 	
 	if(far >= depthScale.y) discard;
-	// gl_FragDepth = clamp(far * depthScale.x,0.0,1.0);
 	
-	ivec2 uv0=ivec2(bestX, bestY),uv1=ivec2(bestX+1u, bestY),uv2=ivec2(bestX+2u, bestY);
+	ivec2 uv0 = bestXY;
+	ivec2 uv1 = bestXY + ivec2(1u, 0u);
+	ivec2 uv2 = bestXY + ivec2(2u, 0u);
 	
 	vec2 srcUV =
 		texelFetch(uvsTex,uv0,0).xy * weights.x +
@@ -253,11 +256,6 @@ void main(){
 		float l2 = dot(srcNormal,srcNormal);
 		result.xyz = l2>0.0 ? (srcNormal)/sqrt(l2)*.5+.5 : vec3(0.5,0.5,1.0);
 		result.a = 1.0;
-		
-		// result.xyz = vec3(1.0-5.0*far*depthScale.x);
-		// result.xyz = fract(dstCoord);
-		// result.xyz = normalize(dstTangent.xyz)*.5+.5;
-		// result.xyz = normalize(dstBitangent)*.5+.5;
 		
 	} else {
 		result = texture(dataTex,srcUV,0.0) * tint;
@@ -682,7 +680,7 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 		gl.uniform2f(gl.getUniformLocation(spreadShader,'duv'), spreadFactor/glw,spreadFactor/glh)
 		bindBuffer(gl.getAttribLocation(spreadShader,'uvs'),2,flatBuffer)
 		
-		let maxIterations = 1//spreadFactor == 1 ? glw / 2.5 : glw / 4
+		let maxIterations = glw / (1.5 * spreadFactor)
 		let testPeriod = Math.min(64, maxIterations)
 		let testMask = testPeriod-1
 		maxIterations -= maxIterations % testPeriod

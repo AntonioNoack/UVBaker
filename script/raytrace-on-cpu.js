@@ -1,16 +1,29 @@
 
 import { clamp, linearToSRGB } from 'script/maths.js'
 import { mergeGeometry, calculateTangents } from 'script/geometry.js'
-import { buildBLAS, trace, volume, RAY_ABCI, RAY_DISTANCE, RAY_SCORE, RAY_UVW } from 'script/rtas.js'
+import { buildBLAS, trace, traceSigned, volume, RAY_ABCI, RAY_DISTANCE, RAY_SCORE, RAY_UVW } from 'script/rtas.js'
 import { finishTexture } from 'script/utils.js'
 
 function fract(x){
 	return x-Math.floor(x)
 }
 
+function prepareRay(ray,px,py,pz,nx,ny,nz,maxDistance){
+	// prepare raytracing
+	ray[0] = px; ray[1] = py; ray[2] = pz
+	ray[3] = nx; ray[4] = ny; ray[5] = nz
+	ray[6] = clamp(1.0/nx, -1e38, 1e38)
+	ray[7] = clamp(1.0/ny, -1e38, 1e38)
+	ray[8] = clamp(1.0/nz, -1e38, 1e38)
+	ray[RAY_SCORE] = maxDistance
+}
+
 function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTime) {
 	
 	const isNormalMap = !!layer.isNormalMap
+	const isAmbient = !!layer.isAO
+	
+	const numSamples = sampleUI.value || 1
 	
 	// build acceleration structure :)
 	// for simplicity, concat all src models into one
@@ -63,8 +76,6 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 			const dstI = dst[dstGeoIdx]
 			const TRANSd = dstI[0].elements
 			const GEOd = dstI[1]
-			
-			console.log('TRANSd:', TRANSd)
 			
 			let POSd = GEOd.attributes.position
 			let NORd = GEOd.attributes.normal
@@ -160,24 +171,15 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 								let nx = nx0*TRANSd[0] + ny0*TRANSd[4] + nz0*TRANSd[ 8]
 								let ny = nx0*TRANSd[1] + ny0*TRANSd[5] + nz0*TRANSd[ 9]
 								let nz = nx0*TRANSd[2] + ny0*TRANSd[6] + nz0*TRANSd[10]
-								
-								// prepare raytracing
-								ray[0] = px; ray[1] = py; ray[2] = pz
 								let nl = 1.0/Math.sqrt(nx*nx+ny*ny+nz*nz)
 								nx *= nl; ny *= nl; nz *= nl;
-								ray[3] = nx; ray[4] = ny; ray[5] = nz
-								ray[6] = clamp(1.0/ray[3], -1e38, 1e38)
-								ray[7] = clamp(1.0/ray[4], -1e38, 1e38)
-								ray[8] = clamp(1.0/ray[5], -1e38, 1e38)
-								ray[RAY_SCORE] = maxDistance
 								
-								// raytrace
-								window.printTrace = false // x == 4 && y == 0
+								// raytracing
+								prepareRay(ray,px,py,pz,nx,ny,nz,maxDistance)
 								trace(tris,root,ray)
 								
 								const dist = ray[RAY_SCORE]
 								const hit = dist < maxDistance
-								if(printTrace) console.log('tracing', x, y, {'origin': [ray[0],ray[1],ray[2]],'dir': [ray[3],ray[4],ray[5]], 'hit': hit})
 								
 								if(hit) {
 									// calculate hit normal in world space
@@ -189,17 +191,20 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 									const srcV = UVSs[ai2s+1]*was + UVSs[bi2s+1]*wbs + UVSs[ci2s+1]*wcs
 									const material = materials[MATs[ai3s/3]]
 									if(isNormalMap){
-										// source normal [world space]
+										// source geometry normal [world space]
 										let nx1 = NORs[ai3s  ]*was + NORs[bi3s  ]*wbs + NORs[ci3s  ]*wcs
 										let ny1 = NORs[ai3s+1]*was + NORs[bi3s+1]*wbs + NORs[ci3s+1]*wcs
 										let nz1 = NORs[ai3s+2]*was + NORs[bi3s+2]*wbs + NORs[ci3s+2]*wcs
+										let nw1 = 1.0/Math.sqrt(nx1*nx1 + ny1*ny1 + nz1*nz1)
+										nx1 *= nw1; ny1 *= nw1; nz1 *= nw1;
+										let nxz = nx1, nyz = ny1, nzz = nz1;
 										
+										// source geometry normal -> source shading normal
 										if(material){
 											let normal = material(srcU,srcV)
 											let nxt = normal[0]
 											let nyt = normal[1]
 											let nzt = normal[2]
-											// console.log('sampled normal', normal)
 											let nt = 1.0/Math.sqrt(nxt*nxt+nyt*nyt+nzt*nzt)
 											nxt *= nt; nyt *= nt; nzt *= nt;
 											let ai4s = ai2s*2, bi4s = bi2s*2, ci4s = ci2s*2
@@ -221,60 +226,87 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 											nz1 = nxt*tz1 + nyt*bz1 + nzt*nz1
 										}
 										
-										let nw1 = 1.0/Math.sqrt(nx1*nx1 + ny1*ny1 + nz1*nz1)
-										nx1 *= nw1
-										ny1 *= nw1
-										nz1 *= nw1
+										nw1 = 1.0/Math.sqrt(nx1*nx1 + ny1*ny1 + nz1*nz1)
+										nx1 *= nw1; ny1 *= nw1; nz1 *= nw1;
 										
-										// destination tangent [dst object space]
-										let ai4d = ai2d+ai2d, bi4d = bi2d+bi2d, ci4d = ci2d+ci2d
-										let tx0 = TANd[ai4d  ]*wad + TANd[bi4d  ]*wbd + TANd[ci4d  ]*wcd
-										let ty0 = TANd[ai4d+1]*wad + TANd[bi4d+1]*wbd + TANd[ci4d+1]*wcd
-										let tz0 = TANd[ai4d+2]*wad + TANd[bi4d+2]*wbd + TANd[ci4d+2]*wcd
-										let tw0 = TANd[ai4d+3]*wad + TANd[bi4d+3]*wbd + TANd[ci4d+3]*wcd
-										let tn = tx0*nx0+ty0*ny0+tz0*nz0
-										tx0 -= tn*nx; ty0 -= tn*ny; tz0 -= tn*nz
-										tn = 1.0/Math.sqrt(tx0*tx0+ty0*ty0+tz0*tz0)
-										tx0 *= tn; ty0 *= tn; tz0 *= tn;
-										
-										// transform normal from [world space] to [dst object space]
-										let nx2 = nx1*TRANSd[0] + ny1*TRANSd[1] + nz1*TRANSd[ 2]
-										let ny2 = nx1*TRANSd[4] + ny1*TRANSd[5] + nz1*TRANSd[ 6]
-										let nz2 = nx1*TRANSd[8] + ny1*TRANSd[9] + nz1*TRANSd[10]
-										let nw2 = nx2*nx2+ny2*ny2+nz2*nz2
-										if(nw2){
-											nw2 = 1.0/Math.sqrt(nw2);
-											nx2*=nw2; ny2*=nw2; nz2*=nw2;
+										if(isAmbient){
+											// sample a few times until we've converged
+											// denoising??
+											let sum = 0
+											let dist0 = maxDistance * 0.01 // todo make this factor configurable (?)
+											let di = ray[RAY_SCORE], dj = 1e-6 * maxDistance
+											// extend ray onto the surface of the source mesh
+											px += nx * di + nx1 * dj
+											py += ny * di + ny1 * dj
+											pz += nz * di + nz1 * dj
+											for(let i=0;i<numSamples;i++){
+												// generate random direction
+												let dx = 1, dy = 1, dz = 1
+												while(dx*dx+dy*dy+dz*dz > 0.99){
+													dx = Math.random()*2-1
+													dy = Math.random()*2-1
+													dz = Math.random()*2-1
+												}
+												nx = nx1 + dx
+												ny = ny1 + dy
+												nz = nz1 + dz
+												let nls = 1.0/Math.sqrt(nx*nx+ny*ny+nz*nz)
+												nx *= nls; ny *= nls; nz *= nls;
+												// check if that direction overlaps with the geometry -> easy dismiss
+												if(nx*nxz + ny*nyz + nz*nzz > 0.0) {
+													prepareRay(ray,px,py,pz,nx,ny,nz,maxDistance)
+													traceSigned(tris,root,ray)
+													let dist = ray[RAY_SCORE]
+													sum += dist / (dist + dist0)
+												}
+											}
+											
+											// write average
+											sum *= 255/numSamples
+											image[q  ] = sum
+											image[q+1] = image[q]
+											image[q+2] = image[q]
+											
+										} else {
+											
+											// destination tangent [dst object space]
+											let ai4d = ai2d+ai2d, bi4d = bi2d+bi2d, ci4d = ci2d+ci2d
+											let tx0 = TANd[ai4d  ]*wad + TANd[bi4d  ]*wbd + TANd[ci4d  ]*wcd
+											let ty0 = TANd[ai4d+1]*wad + TANd[bi4d+1]*wbd + TANd[ci4d+1]*wcd
+											let tz0 = TANd[ai4d+2]*wad + TANd[bi4d+2]*wbd + TANd[ci4d+2]*wcd
+											let tw0 = TANd[ai4d+3]*wad + TANd[bi4d+3]*wbd + TANd[ci4d+3]*wcd
+											let tn = tx0*nx0+ty0*ny0+tz0*nz0
+											tx0 -= tn*nx; ty0 -= tn*ny; tz0 -= tn*nz
+											tn = 1.0/Math.sqrt(tx0*tx0+ty0*ty0+tz0*tz0)
+											tx0 *= tn; ty0 *= tn; tz0 *= tn;
+											
+											// transform normal from [world space] to [dst object space]
+											let nx2 = nx1*TRANSd[0] + ny1*TRANSd[1] + nz1*TRANSd[ 2]
+											let ny2 = nx1*TRANSd[4] + ny1*TRANSd[5] + nz1*TRANSd[ 6]
+											let nz2 = nx1*TRANSd[8] + ny1*TRANSd[9] + nz1*TRANSd[10]
+											let nw2 = nx2*nx2+ny2*ny2+nz2*nz2
+											if(nw2){
+												nw2 = 1.0/Math.sqrt(nw2);
+												nx2*=nw2; ny2*=nw2; nz2*=nw2;
+											}
+											
+											// bitangent via cross product [dst object space]
+											let bx0 = (ny0*tz0-nz0*ty0)*tw0
+											let by0 = (nz0*tx0-nx0*tz0)*tw0
+											let bz0 = (nx0*ty0-ny0*tx0)*tw0
+											
+											// transform normal from [dst object space] to [dst tangent space]
+											// tan=x, bitan=y, nor=z
+											let nx3 = nx2*tx0 + ny2*ty0 + nz2*tz0
+											let ny3 = nx2*bx0 + ny2*by0 + nz2*bz0
+											let nz3 = nx2*nx0 + ny2*ny0 + nz2*nz0
+											
+											// normals [dst tangent space]
+											const inv = 127/Math.sqrt(nx3*nx3 + ny3*ny3 + nz3*nz3)
+											image[q  ] = nx3*inv+127
+											image[q+1] = ny3*inv+127
+											image[q+2] = nz3*inv+127
 										}
-										
-										// bitangent via cross product [dst object space]
-										let bx0 = (ny0*tz0-nz0*ty0)*tw0
-										let by0 = (nz0*tx0-nx0*tz0)*tw0
-										let bz0 = (nx0*ty0-ny0*tx0)*tw0
-										
-										// transform normal from [dst object space] to [dst tangent space]
-										// tan=x, bitan=y, nor=z
-										let nx3 = nx2*tx0 + ny2*ty0 + nz2*tz0
-										let ny3 = nx2*bx0 + ny2*by0 + nz2*bz0
-										let nz3 = nx2*nx0 + ny2*ny0 + nz2*nz0
-										
-										// normals [dst tangent space]
-										// nx3 = nx; ny3 = ny; nz3 = nz; // debug!!, [world space]
-										// nx3 = tx0; ny3 = ty0; nz3 = tz0; // debug!!, [dst tangent, object space]
-										// nx3 = bx0; ny3 = by0; nz3 = bz0; // debug!! [dst bitangent, object space]
-										const inv = 127/Math.sqrt(nx3*nx3 + ny3*ny3 + nz3*nz3)
-										image[q  ] = nx3*inv+127
-										image[q+1] = ny3*inv+127
-										image[q+2] = nz3*inv+127
-										
-										/*image[q  ] = fract(px)*255;
-										image[q+1] = fract(py)*255;
-										image[q+2] = fract(pz)*255;*/
-										
-										/*image[q  ] = Math.max(1.0-5.0*dist/maxDistance,0)*255;
-										image[q+1] = image[q];
-										image[q+2] = image[q];*/
-										
 									} else {
 										if(material){
 											const color = material(srcU,srcV)
@@ -319,7 +351,6 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 		if(session != thisSession) return;
 		let done = true
 		let t0 = Date.now()
-		const debugDisableSpreading = true
 		for(let z=0;z<16;z++) {
 			done = true
 			for(let y=0,i4=0;y<h;y++){
@@ -337,7 +368,7 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 						if(d1 && d2 && image0[j4+5]) { q++; r += image0[j4+4]; g += image0[j4+5]; b += image0[j4+6]; } // +x-y
 						if(d0 && d3 && image0[k4-1]) { q++; r += image0[k4-4]; g += image0[k4-3]; b += image0[k4-2]; } // -x+y
 						if(d1 && d3 && image0[k4+5]) { q++; r += image0[k4+4]; g += image0[k4+5]; b += image0[k4+6]; } // +x+y
-						if(q && !debugDisableSpreading){
+						if(q){
 							image1[i4  ] = r/q
 							image1[i4+1] = g/q
 							image1[i4+2] = b/q
@@ -357,10 +388,6 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 			let tmp = image1
 			image1 = image0
 			image0 = tmp
-			
-			if(debugDisableSpreading){
-				done = true
-			}
 			
 			let dt = Date.now() - t0
 			if(spreadI++ > w) done = true;

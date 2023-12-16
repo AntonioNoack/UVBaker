@@ -89,8 +89,10 @@ const layers = [
 		display0: "roughnessMap", display1: "" }, // green channel
 	{ name: "Metallic",  channel: 2, maps: ["specular", "specularMap", "metalness", "metalnessMap"], 
 		display0: "metalnessMap", display1: "specularMap" }, // blue channel
-	{ name: "AO Map",    channel: 0, maps: ["aoMap", "aoMapIntensity"],
+	{ name: "AO Copied",    channel: 0, maps: ["aoMap", "aoMapIntensity"],
 		display: "aoMap", display1: "aoMap" }, // red channel
+	{ name: 'AO Computed', maps: ["normalMap", "normalScale"], isAO: true, isNormalMap: true,
+		display0: 'map', display1: 'map' },
 	// todo option for bump maps, displacement maps?
 ]
 
@@ -100,18 +102,13 @@ layersUI.onchange = function(){
 	if(newLayer != layer){
 		layer = newLayer
 		matList = null
+		sampleUIContainer.style.display = newLayer.isAO ? '' : 'none'
 	}
 }
 
 processorUI.onchange = function(){
 	useGPU = processorUI.value == "0"
 	matList = null
-}
-for(let i=0;i<layers.length;i++) {
-	let e = document.createElement('option')
-	e.value = i
-	e.innerHTML = layers[i].name
-	layersUI.appendChild(e)
 }
 
 window.session = 0
