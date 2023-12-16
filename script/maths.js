@@ -19,4 +19,9 @@ function clamp(x,min,max){
 	return x<min?min:x<max?x:max
 }
 
-export { random, clamp };
+function mix2d(v00,v01,v10,v11,fx,fy){
+	let gx = 1-fx, gy = 1-fy
+	return (v00*gy+fy*v01)*gx+fx*(v10*gy+fy*v11)
+}
+
+export { random, clamp, mix2d };

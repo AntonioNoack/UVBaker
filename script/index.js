@@ -3,17 +3,15 @@
 // dst: raytrace respective data from pos+dir, onto uv, and project it
 
 import * as THREE from 'three'
-import { OrbitControls } from 'three/controls/OrbitControls.js';
-import { EffectComposer } from 'three/postprocessing/EffectComposer.js';
-import { TAARenderPass } from 'three/postprocessing/TAARenderPass.js';
-import { RGBELoader } from 'three/loaders/RGBELoader.js';
-import { Loader } from 'script/loader.js'
+import { Loader } from 'script/mesh-loader.js'
+import { loadMaterials } from 'script/loader.js'
 import { mergeGeometry, calculateTangents } from 'script/geometry.js'
 import { buildBLAS, maxNodeSize, volume, trace, RAY_SCORE, RAY_ABCI, RAY_UVW } from 'script/rtas.js'
-import { random, clamp } from 'script/maths.js'
+import { random, clamp, mix2d } from 'script/maths.js'
+import { create, splitByMaterial, collectData, camSetup } from 'script/scene.js'
 
 // GPU path isn't working yet
-let useGPU = false
+window.useGPU = false
 let useWebGL2 = true
 
 // useGPU ? 'MetallicSphere1.glb' : 'cube.obj' //'cube gradient.glb'
@@ -33,211 +31,13 @@ let extra = titleSrc.getBoundingClientRect().bottom
 let w = window.innerWidth, h = window.innerHeight-extra
 
 const normalMat = new THREE.MeshNormalMaterial()
-const displayMat0 = new THREE.MeshStandardMaterial()
-const displayMat1 = new THREE.MeshPhongMaterial()
-let displayMat = displayMat1
+window.displayMat0 = new THREE.MeshStandardMaterial()
+window.displayMat1 = new THREE.MeshPhongMaterial()
+window.displayMat = displayMat1
 
-function create(div,idx){
-	
-	const models = []
-
-	const scene = new THREE.Scene()
-	const camera = new THREE.PerspectiveCamera(75, w/(3*h), 0.1, 1000)
-
-	const renderer = window.renderer = new THREE.WebGLRenderer({ alpha: true })
-	renderer.setSize(w*0.326, h)
-	renderer.setClearColor(0, 0)
-	renderer.toneMapping = THREE.ACESFilmicToneMapping
-	renderer.toneMappingExposure = 1
-	div.appendChild(renderer.domElement)
-
-	const sun = new THREE.DirectionalLight(0xffffee, 2.0)
-	sun.position.set(-10,3.8,3) // inverse direction, because target = 0
-	scene.add(sun)
-
-	const sun2 = new THREE.DirectionalLight(0xaaaaff, 0.1)
-	sun2.position.set(10,-3.8,-3) // inverse direction, because target = 0
-	scene.add(sun2)
-
-	const ambient = new THREE.AmbientLight(0xffffff, 0.2)
-	scene.add(ambient)
-	scene.add(sun.target)
-
-	camera.position.z = 3
-
-	scene.background = null
-
-	const controls = new OrbitControls( camera, renderer.domElement )
-	controls.listenToKeyEvents(div)
-	controls2.push(controls)
-	
-	// rotate camera initially
-	controls.minAzimuthAngle = 0.63
-	controls.maxAzimuthAngle = controls.minAzimuthAngle
-	controls.minPolarAngle = Math.PI/2-0.5
-	controls.maxPolarAngle = controls.minPolarAngle
-	controls.update()
-	controls.minAzimuthAngle = -1e308
-	controls.maxAzimuthAngle = +1e308
-	controls.minPolarAngle = 0
-	controls.maxPolarAngle = Math.PI
-	
-	let cancelEvent = (e) => { e.preventDefault(); e.stopPropagation() }
-	div.addEventListener('dragenter', cancelEvent, false)
-	div.addEventListener('dragleave', cancelEvent, false)
-	div.addEventListener('dragover',  cancelEvent, false)
-	let title = div.getElementsByTagName('p')[0]
-	function loadFiles(e){
-		scene.background = null;
-		session++;
-		
-		if(idx == 0) {
-			blas = null;
-			matList = null;
-			srcGeoData = {}
-		}
-		
-		console.log('removing '+models.length+' models')
-		for(let i=0;i<models.length;i++){
-			scene.remove(models[i])
-		}
-		models.splice(0,models.length)
-		data[idx].splice(0,data[idx].length)
-		
-		function process(sc){
-			const model = sc.scene || sc
-			collectData(model,idx,idx)
-			models.push(model)
-			scene.add(model)
-			camSetup(model,controls,camera)
-		}
-		
-		new Loader(process).load(e);
-	}
-	let movement = 0
-	title.addEventListener('mousedown', (e) => {
-		movement = 0
-	})
-	title.addEventListener('mousemove', (e) => {
-		let dx=e.movementX,dy=e.movementY
-		movement += Math.hypot(dx,dy)
-	})
-	title.addEventListener('click', (e) => {
-		if(movement < 7){
-			let input = document.createElement('input')
-			input.type = 'file'
-			input.onchange = (e) => { loadFiles({ dataTransfer: e.target }) }
-			input.click()
-		}
-	})
-	div.addEventListener('drop', (e) => {
-		e.preventDefault(); e.stopPropagation()
-		loadFiles(e)
-	}, false)
-	
-	if(1){
-		const composer = new EffectComposer(renderer)
-		const taaPass = new TAARenderPass(scene, camera)
-		// taaPass.unbiased = false // this line introduced banding :/
-		taaPass.sampleLevel = 3 // 2 is good, 3 is excellent :)
-		// taaPass.accumulate = true // doesn't render anything anymore
-		
-		composer.addPass(taaPass)
-		renderers.push(composer)
-	} else {
-		renderers.push(renderer)
-	}
-	renderers2.push(renderer)
-	cameras.push(camera)
-	scenes.push(scene)
-	return models
-
-}
-
-function splitByMaterial(geometry, materials) {
-	var parts = [], geo, vMap, iMat
-	function addPart() {
-		var mat = materials[iMat]
-		parts.push(new THREE.Mesh(geo, mat))
-	}
-	geometry.faces.forEach((face) => {
-		if(face.materialIndex != iMat) {
-			if(iMat !== undefined)
-				addPart();
-			geo = new THREE.Geometry()
-			vMap = {}
-			iMat = face.materialIndex
-		}
-		var f = face.clone()
-		['a','b','c'].forEach((p) => {
-			var iv = face[p]
-			if(!vMap.hasOwnProperty(iv))
-				vMap[iv] = geo.vertices.push(geometry.vertices[iv]) - 1;
-			f[p] = vMap[iv]
-		})
-		geo.faces.push(f)
-	})
-	addPart()
-	return parts
-}
-
-function collectData(model,i){
-	model.traverseVisible(it => {
-		if(it instanceof THREE.Mesh) {
-			
-			let matrix = it.matrixWorld
-			
-			function add(it, geo, mat) {
-				let isPhong = it.material instanceof THREE.MeshPhongMaterial
-				if(i == 0 && (isPhong != (displayMat == displayMat1))){
-					displayMat = isPhong ? displayMat1 : displayMat0
-					// shadersUI.value = isPhong ? "1" : "0"
-					updatePreviewMaterial()
-				}
-				// data: diffuse (map), emissive (emissiveMap), normals (normalMap), ao (aoMap),
-				//  metalnessMap, roughnessMap
-				data[i].push([matrix, geo, mat, it])
-			}
-			
-			console.log('mesh:', it)
-			let mat = it.material
-			if(i == 1) it.material = displayMat
-			if(false && Array.isArray(mat) && it.geometry.faces) { // untested
-				splitByMaterial(it.geometry, mat).forEach(x => {
-					add(x, x.geometry, x.material)
-				})
-			} else {
-				add(it, it.geometry, mat)
-			}
-			
-		}
-	})
-}
-
-function updatePreviewMaterial(){
-	let meshes = data[1]
-	for(let i=0;i<meshes.length;i++) {
-		meshes[i][3].material = displayMat
-	}
-}
-
-function camSetup(model, controls, camera){
-	const bounds = new THREE.Box3().setFromObject(model,true)
-	const dist = 1.3 * Math.max(bounds.max.x-bounds.min.x,bounds.max.y-bounds.min.y,bounds.max.z-bounds.min.z)
-	bounds.getCenter(controls.target)
-	controls.minPolarAngle = 1.57
-	controls.maxPolarAngle = 1.57
-	controls.minDistance = dist * 0.01
-	controls.maxDistance = dist * 3.0
-	controls.update()
-	controls.minPolarAngle = 0
-	controls.maxPolarAngle = Math.PI
-	camera.near = dist * 0.001
-	camera.far = dist * 3.0
-}
-
-const srcModels = create(divSrc,0)
-const dstModels = create(divDst,1)
+let extra1 = {w,h,controls2,renderers,renderers2,cameras,scenes}
+const srcModels = create(divSrc,0,extra1)
+const dstModels = create(divDst,1,extra1)
 const modelss = [srcModels,dstModels]
 
 function process(scene,i){
@@ -275,8 +75,8 @@ window.addEventListener('resize', onWindowResize, false);
 
 // triangle: [min,max,avg,ai,bi,ci], v0=min,v1=avg,v2=max
 
-let resCtx1 = resCanvas1.getContext('2d', { antialias: false })
-let resCtx2 = resCanvas2.getContext(useWebGL2 ? 'webgl2' : 'webgl')
+window.resCtx1 = resCanvas1.getContext('2d', { antialias: false })
+window.resCtx2 = resCanvas2.getContext(useWebGL2 ? 'webgl2' : 'webgl')
 const layers = [
 	{ name: "Normals",   maps: ["normalMap", "normalScale"], isNormalMap: true,
 		display0: "normalMap", display1: "normalMap" },
@@ -293,7 +93,7 @@ const layers = [
 	// todo option for bump maps, displacement maps?
 ]
 
-let layer = layers[0]
+window.layer = layers[0]
 layersUI.onchange = function(){
 	let newLayer = layers[layersUI.value*1]
 	if(newLayer != layer){
@@ -314,170 +114,7 @@ for(let i=0;i<layers.length;i++) {
 }
 
 let renderer = new THREE.WebGLRenderer()
-let images = {}
-let session = 0
-
-function mix2d(v00,v01,v10,v11,fx,fy){
-	let gx = 1-fx, gy = 1-fy
-	return (v00*gy+fy*v01)*gx+fx*(v10*gy+fy*v11)
-}
-
-function loadImage(map){
-	
-	let image = images[map]
-	if(image) return image;
-	
-	if(!map.image) return;
-	let width = map.image.width, height = map.image.height
-	if(width * height < 10){
-		width *= 3; height *= 3
-	}
-	renderer.setSize(width,height)
-	const target = new THREE.WebGLRenderTarget(width,height)
-	const data = new Uint8ClampedArray(width*height*4)
-	renderer.setRenderTarget(target)
-	const scene = new THREE.Scene()
-	const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2,2), new THREE.MeshBasicMaterial({ map }))
-	scene.add(mesh)
-	mesh.position.z = -1
-	const camera = new THREE.Camera()
-	camera.aspect = width/height
-	renderer.render(scene, camera)
-	renderer.readRenderTargetPixels(target,0,0,width,height,data)
-	target.dispose()
-	let allZero = true
-	for(let i=0;i<data.length;i++) {
-		if(data[i]) {
-			allZero = false; break;
-		}
-	}
-	if(!allZero){
-		resCanvas1.width = width
-		resCanvas1.height = height
-		resCtx1.putImageData(new ImageData(data,width,height),0,0)
-		image = {width,height,data}
-		// throw 'see image '+maps[i]+' for '+material.name + ' ' + w+'x'+h
-	} else {
-		image = null
-		console.log('blank image :/')
-	}
-	return image
-}
-
-function loadMaterials(materials,k,thisSession,callback){
-	let src = data[0]
-	if(k>=src.length) return callback()
-	let srcI = src[k]
-	let geometry = srcI[1]
-	let material = srcI[2]
-	if(Array.isArray(material)) {
-		if(material.length > 1) alert('Only supports one material, maybe try GLTF! Using first material.')
-		material = material[0]
-	}
-	let pos = geometry.attributes.position
-	if(pos) {
-		let maps = layer.maps || []
-		let invMaps = layer.invMaps || []
-		let expMaps = layer.expMaps || []
-		let image = null, tint = [1,1,1,1]
-		let invImage = false; // todo respect that
-		for(let i=0;i<maps.length;i++){
-			let map = material[maps[i]]
-			if(map !== null && map !== undefined) {
-				if(map instanceof THREE.Texture){
-					if(session != thisSession) return;
-					image = loadImage(map)
-				} else if(map instanceof THREE.Color){
-					tint[0] *= map.r
-					tint[1] *= map.g
-					tint[2] *= map.b
-				} else if(map instanceof THREE.Vector2){
-					tint[0] *= map.x
-					tint[1] *= map.y
-				} else if(!isNaN(map)){
-					tint[0] *= map
-					tint[1] *= map
-					tint[2] *= map
-				} else console.log('todo, material value:', map)
-			}
-		}
-		for(let i=0;i<invMaps.length;i++){
-			let map = material[invMaps[i]]
-			if(map !== null && map !== undefined) {
-				if(map instanceof THREE.Texture){
-					if(session != thisSession) return;
-					image = loadImage(map)
-				} else if(map instanceof THREE.Color){
-					tint[0] *= map.r
-					tint[1] *= map.g
-					tint[2] *= map.b
-				} else if(map instanceof THREE.Vector2){
-					tint[0] *= map.x
-					tint[1] *= map.y
-				} else if(!isNaN(map)){
-					tint[0] *= map
-					tint[1] *= map
-					tint[2] *= map
-				} else console.log('todo, inv material value:', map)
-			}
-		}
-		for(let i=0;i<expMaps.length;i++){
-			let map = material[expMaps[i]]
-			if(map != undefined){
-				console.log(expMaps[i]+':', map)
-				if(!isNaN(map)){
-					map = 1/(1+map/30)
-					tint[0] *= map
-					tint[1] *= map
-					tint[2] *= map
-				} else console.log('todo, exp material value:', map)
-			}
-		}
-		if(useGPU) {
-			materials.push(!layer.isNormalMap || image ? {image,tint} : null)
-		} else {
-			const tinted = tint[0] != 1 || tint[1] != 1 || tint[2] != 1 || tint[3] != 1
-			if(image == null && tinted) {
-				for(let i=0;i<4;i++) tint[i] *= 255
-			}
-			const isDefault = image == null && (!tinted || layer.isNormalMap)
-			const offset = layer.isNormalMap ? 127 : 0
-			const ch = layer.channel
-			const single = ch !== undefined
-			materials.push(isDefault ? null : (u,v) => {
-				if(image){
-					// sample from image
-					// todo linear interpolation
-					// todo sample whole section using dx,dy...
-					const w = image.width, h = image.height
-					u -= Math.floor(u)
-					v -= Math.floor(v)
-					const x = u*w-0.5
-					const y = v*h-0.5
-					const x0 = Math.min(x|0,w-1), y0 = Math.min(y|0,h-1), fx = x-x0, fy=y-y0
-					const x1 = x0+1>=w ? 0 : x0+1, y1 = y0+1>=h ? 0 : y0+1
-					const idx0 = ((x0)+(y0)*w)*4
-					const idx1 = ((x0)+(y1)*w)*4
-					const idx2 = ((x1)+(y0)*w)*4
-					const idx3 = ((x1)+(y1)*w)*4
-					const pixels = image.data
-					if(single){
-						const data = (mix2d(pixels[idx0+ch],pixels[idx1+ch],pixels[idx2+ch],pixels[idx3+ch],fx,fy)-offset)*tint[0]
-						return [ data, data, data, 255 ]
-					} else {
-						return [
-							(mix2d(pixels[idx0  ],pixels[idx1  ],pixels[idx2  ],pixels[idx3  ],fx,fy)-offset)*tint[0],
-							(mix2d(pixels[idx0+1],pixels[idx1+1],pixels[idx2+1],pixels[idx3+1],fx,fy)-offset)*tint[1],
-							(mix2d(pixels[idx0+2],pixels[idx1+2],pixels[idx2+2],pixels[idx3+2],fx,fy)-offset)*tint[2],
-							 mix2d(pixels[idx0+3],pixels[idx1+3],pixels[idx2+3],pixels[idx3+3],fx,fy)*tint[3]
-						]
-					}
-				} else return tint
-			})
-		}
-	}
-	loadMaterials(materials,k+1,thisSession,callback)
-}
+window.session = 0
 
 let startTime = 0
 function bake(){
@@ -497,10 +134,10 @@ for(let i=0;i<256;i++){
 	linearToSRGB[i] = Math.max(269 * Math.pow(i/255, 1.0/2.4) - 14, 0);
 }
 
-let blas = null
-let matList = null
-let srcGeoData = {}
-let dstGeoData = {}
+window.blas = null
+window.matList = null
+window.srcGeoData = {}
+window.dstGeoData = {}
 
 function finishTexture(imageData){
 	const texture = new THREE.Texture(imageData)
@@ -570,7 +207,7 @@ function bake1(materials,thisSession) {
 	
 	console.log(-lastTime+(lastTime=Date.now()), 'merging geometry + tangents')
 	
-	blas = blas || buildBLAS(POSs,IDXs)
+	const blas = window.blas = window.blas || buildBLAS(POSs,IDXs)
 	const root = blas[0]
 	const bounds = root[0]
 	const tris = blas[1]
