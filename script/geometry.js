@@ -1,4 +1,6 @@
 
+import { TRIS_ABC_IDX } from 'script/rtas.js';
+
 function mergeGeometry(src,geoData,materials,isNormalMap,needsUVs,needsTangents) {
 	let posSum = 0, idxSum = 0
 	for(let i=0;i<src.length;i++){
@@ -325,4 +327,4 @@ function calculateTangents(pos,nor,uvs,idx,ic0,ic1){
 	return tan1
 }
 
-export { mergeGeometry, calculateTangents };
+export { mergeGeometry, calculateTangents, unpackGeometryByIndices, unpackGeometryByIndicesV2 };

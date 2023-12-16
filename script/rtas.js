@@ -270,4 +270,4 @@ function trace(tris,node,ray){
 	} else if(printTrace) console.log('Missed AABB')
 }
 
-export { trace, buildBLAS, maxNodeSize, volume, RAY_SCORE, RAY_ABCI, RAY_UVW };
+export { trace, buildBLAS, maxNodeSize, volume, RAY_SCORE, RAY_ABCI, RAY_UVW, RAY_DISTANCE, TRIS_ABC_IDX };

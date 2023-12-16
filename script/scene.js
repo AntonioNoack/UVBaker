@@ -1,8 +1,8 @@
 
 import * as THREE from 'three'
-import { OrbitControls } from 'three/controls/OrbitControls.js';
-import { EffectComposer } from 'three/postprocessing/EffectComposer.js';
-import { TAARenderPass } from 'three/postprocessing/TAARenderPass.js';
+import { OrbitControls } from 'three/controls/OrbitControls.js'
+import { EffectComposer } from 'three/postprocessing/EffectComposer.js'
+import { TAARenderPass } from 'three/postprocessing/TAARenderPass.js'
 import { Loader } from 'script/mesh-loader.js'
 
 window.THREE = THREE
@@ -206,4 +206,30 @@ function camSetup(model, controls, camera){
 	camera.far = dist * 3.0
 }
 
-export { create, splitByMaterial, collectData, camSetup };
+function loadReflectionMap(scenes){
+	let bgImg = new Image()
+	bgImg.onload = function(){
+		resCanvas1.width=bgImg.width
+		resCanvas1.height=bgImg.height
+		resCtx1.drawImage(bgImg,0,0)
+		let data = resCtx1.getImageData(0,0,bgImg.width,bgImg.height)
+		let rgba = data.data, w = data.width, h = data.height
+		let floats = new Float32Array(w*h*3)
+		let max = 255.5, invMax = 1.0/max
+		for(let i=0,j=0,l=w*h*4;i<l;i+=4,j+=3){
+			let r = rgba[i]*invMax, g = rgba[i+1]*invMax, b = rgba[i+2]*invMax
+			r = r*r; g = g*g; b = b*b; // srgb -> linear
+			r /= 1-r; g /= 1-g; b /= 1-b;
+			floats[j] = r; floats[j+1] = g; floats[j+2] = b;
+		}
+		// we could use half floats, too :)
+		let texture = new THREE.DataTexture(floats,w,h,THREE.RGBFormat,THREE.FloatType)
+		texture.mapping = THREE.EquirectangularReflectionMapping
+		texture.flipY = true
+		scenes[0].environment = texture
+		scenes[1].environment = texture
+	}
+	bgImg.src = 'env/scythian_tombs_2_4k_30.webp'
+}
+
+export { create, splitByMaterial, collectData, camSetup, loadReflectionMap };
