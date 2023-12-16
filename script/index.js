@@ -7,15 +7,17 @@ import { OrbitControls } from 'three/controls/OrbitControls.js';
 import { EffectComposer } from 'three/postprocessing/EffectComposer.js';
 import { TAARenderPass } from 'three/postprocessing/TAARenderPass.js';
 import { RGBELoader } from 'three/loaders/RGBELoader.js';
-import { Loader } from 'loaderjs'
+import { Loader } from 'script/loader.js'
+import { mergeGeometry, calculateTangents } from 'script/geometry.js'
+import { buildBLAS, maxNodeSize, volume, trace, RAY_SCORE, RAY_ABCI, RAY_UVW } from 'script/rtas.js'
+import { random, clamp } from 'script/maths.js'
 
 // GPU path isn't working yet
-let useGPU = true
+let useGPU = false
 let useWebGL2 = true
 
-const maxNodeSize = 1
 // useGPU ? 'MetallicSphere1.glb' : 'cube.obj' //'cube gradient.glb'
-const file0 = 'MetallicSphere1.glb'
+const file0 = 'cube.obj'
 const file1 = 'cube.obj'
 
 window.src = []
@@ -34,26 +36,6 @@ const normalMat = new THREE.MeshNormalMaterial()
 const displayMat0 = new THREE.MeshStandardMaterial()
 const displayMat1 = new THREE.MeshPhongMaterial()
 let displayMat = displayMat1
-
-let rndState = 12635
-
-function xoshiro128ss(a, b, c, d) {
-    return function() {
-        let t = b << 9, r = b * 5; r = (r << 7 | r >>> 25) * 9;
-        c ^= a; d ^= b;
-        b ^= c; a ^= d; c ^= t;
-        d = d << 11 | d >>> 21;
-		// >>>0 makes the number unsigned, Magic 😄
-        return (r>>>0) / 4294967296;
-    }
-}
-
-let random = xoshiro128ss(-2121261364, 25226896, -1525018226, -926567007)
-// let random = Math.random
-
-function clamp(x,min,max){
-	return x<min?min:x<max?x:max
-}
 
 function create(div,idx){
 	
@@ -171,7 +153,6 @@ function create(div,idx){
 	return models
 
 }
-
 
 function splitByMaterial(geometry, materials) {
 	var parts = [], geo, vMap, iMat
@@ -294,271 +275,6 @@ window.addEventListener('resize', onWindowResize, false);
 
 // triangle: [min,max,avg,ai,bi,ci], v0=min,v1=avg,v2=max
 
-function bounds(tris,start,end){
-	let tri = tris[start]
-	let minx = tri[0], maxx = tri[3]
-	let miny = tri[1], maxy = tri[4]
-	let minz = tri[2], maxz = tri[5]
-	for(let i=start+1;i<end;i++){
-		tri = tris[i]
-		minx = Math.min(minx,tri[0]); miny = Math.min(miny,tri[1]); minz = Math.min(minz,tri[2])
-		maxx = Math.max(maxx,tri[3]); maxy = Math.max(maxy,tri[4]); maxz = Math.max(maxz,tri[5])
-	}
-	// console.log('bounds',start,end,[minx,miny,minz,maxx,maxy,maxz])
-	return [minx,miny,minz,maxx,maxy,maxz]
-}
-function unionBounds(a,b){
-	return [ Math.min(a[0],b[0]), Math.min(a[1],b[1]), Math.min(a[2],b[2]),
-			 Math.max(a[3],b[3]), Math.max(a[4],b[4]), Math.max(a[5],b[5]) ]
-}
-
-function volume(b){ return (b[3]-b[0])*(b[4]-b[1])*(b[5]-b[2]) }
-
-function buildBLAS0(tris,start,end) {
-	const count = end-start
-	if(count <= maxNodeSize){
-		return [bounds(tris,start,end),start,end]
-	} else {
-		// bounds of centers to find largest dimension
-		const end = start+count
-		const dim = findSplittingDim(tris,start,end)
-		const mid = findMedian(tris,start,end,dim)
-		const child0 = buildBLAS0(tris,start,mid)
-		const child1 = buildBLAS0(tris,mid,end)
-		const union = unionBounds(child0[0],child1[0])
-		return [union,child0,child1,dim]
-	}
-}
-
-function findSplittingDim(tris,start,end){
-	const t0 = tris[start]
-	let minx = t0[6], maxx = minx
-	let miny = t0[7], maxy = miny
-	let minz = t0[8], maxz = minz
-	for(let i=start+1;i<end;i++){
-		const ti = tris[i]
-		const x = ti[6]
-		const y = ti[7]
-		const z = ti[8]
-		minx = Math.min(minx,x)
-		miny = Math.min(miny,y)
-		minz = Math.min(minz,z)
-		maxx = Math.max(maxx,x)
-		maxy = Math.max(maxy,y)
-		maxz = Math.max(maxz,z)
-	}
-	
-	// find largest delta-dim
-	const dx = maxx-minx, dy = maxy-miny, dz = maxz-minz
-	return dx >= dy && dx >= dz ? 0 : dy >= dz ? 1 : 2
-}
-
-function findMedian(tris,start,end,dim){
-	// find median
-	// slice: start, end
-	const idx = dim + 6 // to sort by avg
-	const count = end-start
-	let mid = (start + end) >> 1
-	let numTries = Math.log2(count) / 2
-	for(let tries=0;tries<numTries;tries++){
-		function sample(){
-			return tris[start + ((random()*count)|0)][idx]
-		}
-		// avg instead of sum moved time from 360ms to 300ms for Lucy
-		let sum = 0, cnt = 5
-		for(let j=0;j<cnt;j++) sum += sample()
-		let pivot = sum / cnt
-		// partition by pivot
-		let i = start - 1
-		let j = end// + 1
-		while(true){
-			do { j--; } while(tris[j][idx] < pivot);
-			do { i++; } while(tris[i][idx] > pivot);
-			if(i<j) {
-				let tmp = tris[i]
-				tris[i] = tris[j]
-				tris[j] = tmp
-			} else break;
-		}
-		// check if partition is good enough
-		let relative = j - start
-		if(relative > 0.25 * count && relative < 0.75 * count) { // 50% chance
-			mid = j
-			break;
-		}
-	}
-	// else partitioning will have pre-sorted the list, and we can just use mid
-	return mid
-}
-
-const TRIS_AVG_IDX = 6
-const TRIS_ABC_IDX = 9
-
-function buildBLAS(pos,idx){
-	// generate tris
-	let t0 = Date.now()
-	const tris = []
-	for(let i=0;i<idx.length;){
-		const ai = idx[i++]
-		const bi = idx[i++]
-		const ci = idx[i++]
-		const ai3 = ai*3
-		const bi3 = bi*3
-		const ci3 = ci*3
-		const ax = pos[ai3], ay = pos[ai3+1], az = pos[ai3+2]
-		const bx = pos[bi3], by = pos[bi3+1], bz = pos[bi3+2]
-		const cx = pos[ci3], cy = pos[ci3+1], cz = pos[ci3+2]
-		tris.push([
-			Math.min(ax,bx,cx),
-			Math.min(ay,by,cy),
-			Math.min(az,bz,cz),
-			Math.max(ax,bx,cx),
-			Math.max(ay,by,cy),
-			Math.max(az,bz,cz),
-			(ax+bx+cx),
-			(ay+by+cy),
-			(az+bz+cz),
-			ai,bi,ci
-		])
-	}
-	console.log(Date.now()-t0, 'collecting tris')
-	// console.log(tris)
-	let blas = buildBLAS0(tris,0,tris.length)
-	return [blas,tris]
-}
-
-let POSs = null
-let NORs = null
-let TANs = null
-let UVSs = null
-let MATs = null
-let IDXs = null
-let tris = null
-
-// ray: [origin,dir,inv-dir,best@9,abci@10,uvw@13]
-const RAY_ORIGIN = 0
-const RAY_DIR = 3
-const RAY_INV_DIR = 6
-const RAY_SCORE = 9
-const RAY_ABCI = 10
-const RAY_UVW = 13
-const RAY_DISTANCE = 16
-
-function safeMin(x,y){
-	return x<y?x:y
-}
-
-function safeMax(x,y){
-	return x>y?x:y
-}
-
-let printTrace = false
-function aabbHitsRay(b,ray) {
-	// return true;
-	const rx = ray[0], ry = ray[1], rz = ray[2]
-	const rdx = ray[6], rdy = ray[7], rdz = ray[8]
-	const sx0 = (b[0] - rx) * rdx
-	const sy0 = (b[1] - ry) * rdy
-	const sz0 = (b[2] - rz) * rdz
-	const sx1 = (b[3] - rx) * rdx
-	const sy1 = (b[4] - ry) * rdy
-	const sz1 = (b[5] - rz) * rdz
-	const nearX = safeMin(sx0, sx1)
-	const nearY = safeMin(sy0, sy1)
-	const nearZ = safeMin(sz0, sz1)
-	const near  = safeMax(safeMax(nearX, nearY), safeMax(nearZ, -ray[9]))
-	const farX = safeMax(sx0, sx1)
-	const farY = safeMax(sy0, sy1)
-	const farZ = safeMax(sz0, sz1)
-	const far  = safeMin(farX, safeMin(farY, farZ))
-	// if(printTrace) console.log(sx0,sx1,sy0,sy1,sz0,sz1,'->',nearX,farX,nearY,farY,nearZ,farZ,'->',near,far,'-',ray[9],'>',far >= near,'&&',near < ray[9])
-	return far >= near && near < ray[9]
-}
-
-function triHitsRay(ai3,bi3,ci3,ray){
-	
-	const pos = POSs
-	const ax = pos[ai3], ay = pos[ai3+1], az = pos[ai3+2]
-	const x0 = pos[bi3  ] - ax
-	const y0 = pos[bi3+1] - ay
-	const z0 = pos[bi3+2] - az
-	const x1 = pos[ci3  ] - ax
-	const y1 = pos[ci3+1] - ay
-	const z1 = pos[ci3+2] - az
-	
-	// normal
-	const nx = y0 * z1 - z0 * y1
-	const ny = z0 * x1 - x0 * z1
-	const nz = x0 * y1 - y0 * x1
-	
-	const dist = nx * pos[ai3] + ny * pos[ai3+1] + nz * pos[ai3+2] // n * a
-	const norXdir = nx*ray[RAY_DIR] + ny*ray[RAY_DIR+1] + nz*ray[RAY_DIR+2]
-	if(norXdir < 0.0) return; // back-side
-	const distance = (dist - (nx*ray[RAY_ORIGIN] + ny*ray[RAY_ORIGIN+1] + nz*ray[RAY_ORIGIN+2])) / norXdir
-	const score = Math.abs(distance)// * (1+(norXdir)/Math.sqrt(nx*nx+ny*ny+nz*nz))
-	if (score < ray[RAY_SCORE]) {
-	
-		// dstPosition = origin + distance * direction
-		const dx = ray[RAY_ORIGIN  ] + distance * ray[RAY_DIR]
-		const dy = ray[RAY_ORIGIN+1] + distance * ray[RAY_DIR+1]
-		const dz = ray[RAY_ORIGIN+2] + distance * ray[RAY_DIR+2]
-
-		// barycentric coordinates
-		const x2 = dx - ax
-		const y2 = dy - ay
-		const z2 = dz - az
-		const d00 = x0*x0 + y0*y0 + z0*z0
-		const d01 = x0 * x1 + y0 * y1 + z0 * z1
-		const d11 = x1*x1 + y1*y1 + z1*z1
-		const d20 = x0 * x2 + y0 * y2 + z0 * z2
-		const d21 = x1 * x2 + y1 * y2 + z1 * z2
-		const d = 1.0 / (d00 * d11 - d01 * d01)
-		const v = (d11 * d20 - d01 * d21) * d
-		const w = (d00 * d21 - d01 * d20) * d
-		const u = 1.0 - v - w
-
-		const min = 0.0
-		if (u >= min && v >= min && w >= min) {
-			// set result
-			ray[RAY_SCORE] = score
-			ray[RAY_ABCI] = ai3
-			ray[RAY_ABCI+1] = bi3
-			ray[RAY_ABCI+2] = ci3
-			ray[RAY_UVW] = u
-			ray[RAY_UVW+1] = v
-			ray[RAY_UVW+2] = w
-			ray[RAY_DISTANCE] = distance
-		}
-	}
-}
-
-function trace(node,ray){
-	if(aabbHitsRay(node[0],ray)){
-		if(node.length == 4){
-			// with split dimension, has children
-			// decide order based on ray-dir and dim
-			const dim = node[3]
-			if(printTrace) console.log('Split',dim)
-			if(ray[3+dim] > 0.0){
-				trace(node[1],ray)
-				trace(node[2],ray)
-			} else {
-				trace(node[2],ray)
-				trace(node[1],ray)
-			}
-		} else {
-			const start = node[1], end = node[2]
-			if(printTrace) console.log('Tris', start, end)
-			for(let i=start;i<end;i++){
-				const tri = tris[i]
-				const ai = tri[TRIS_ABC_IDX], bi = tri[TRIS_ABC_IDX+1], ci = tri[TRIS_ABC_IDX+2]
-				if(printTrace) console.log('Tri', ai, bi, ci)
-				triHitsRay(ai*3,bi*3,ci*3,ray)
-			}
-		}
-	} else if(printTrace) console.log('Missed AABB')
-}
-
 let resCtx1 = resCanvas1.getContext('2d', { antialias: false })
 let resCtx2 = resCanvas2.getContext(useWebGL2 ? 'webgl2' : 'webgl')
 const layers = [
@@ -585,12 +301,6 @@ layersUI.onchange = function(){
 		matList = null
 	}
 }
-
-/*shadersUI.onchange = function(){
-	displayMat = shadersUI.value*1 ? displayMat1 : displayMat0
-	updatePreviewMaterial()
-}
-shadersUI.value = displayMat == displayMat0 ? "0" : "1"*/
 
 processorUI.onchange = function(){
 	useGPU = processorUI.value == "0"
@@ -782,87 +492,6 @@ function bake(){
 	})
 }
 
-function calculateTangents(pos,nor,uvs,idx,ic0,ic1){
-	let tan1 = new Float32Array(nor.length/3*4)
-	let tan2 = new Float32Array(nor.length/3*4)
-	for(let i=ic0;i<ic1;){
-		
-		// vertex indices
-		let i0 = idx ? idx[i++] : i++
-		let i1 = idx ? idx[i++] : i++
-		let i2 = idx ? idx[i++] : i++
-		
-		let i02 = i0 + i0, i03 = i0 + i02, i04 = i02 + i02
-		let i12 = i1 + i1, i13 = i1 + i12, i14 = i12 + i12
-		let i22 = i2 + i2, i23 = i2 + i22, i24 = i22 + i22
-		
-		let v0x = pos[i03], v0y = pos[i03 + 1], v0z = pos[i03 + 2]
-		let v1x = pos[i13], v1y = pos[i13 + 1], v1z = pos[i13 + 2]
-		let v2x = pos[i23], v2y = pos[i23 + 1], v2z = pos[i23 + 2]
-		
-		let x1 = v1x - v0x
-		let x2 = v2x - v0x
-		let y1 = v1y - v0y
-		let y2 = v2y - v0y
-		let z1 = v1z - v0z
-		let z2 = v2z - v0z
-		
-		let w0x = uvs[i02]
-		let w0y = uvs[i02 + 1]
-		
-		let s1 = uvs[i12] - w0x
-		let s2 = uvs[i22] - w0x
-		let t1 = uvs[i12 + 1] - w0y
-		let t2 = uvs[i22 + 1] - w0y
-		
-		function add(v,i,x,y,z){
-			v[i] += x; v[i+1] += y; v[i+2] += z
-		}
-		
-		let area = s1*t2-s2*t1
-		if(Math.abs(area)>1e-16){
-			let r = 1.0 / area
-			let sx = (t2 * x1 - t1 * x2) * r
-			let sy = (t2 * y1 - t1 * y2) * r
-			let sz = (t2 * z1 - t1 * z2) * r
-			add(tan1, i04, sx, sy, sz)
-			add(tan1, i14, sx, sy, sz)
-			add(tan1, i24, sx, sy, sz)
-
-			let tx = (s1 * x2 - s2 * x1) * r
-			let ty = (s1 * y2 - s2 * y1) * r
-			let tz = (s1 * z2 - s2 * z1) * r
-			add(tan2, i04, tx, ty, tz)
-			add(tan2, i14, tx, ty, tz)
-			add(tan2, i24, tx, ty, tz)
-		}
-	}
-	for(let i=0,j=0;i<nor.length;){
-		let nx = nor[i++]
-		let ny = nor[i++]
-		let nz = nor[i++]
-		let sx = tan1[j]
-		let sy = tan1[j+1]
-		let sz = tan1[j+2]
-		let dot = nx*sx+ny*sy+nz*sz
-		sx -= nx * dot
-		sy -= ny * dot
-		sz -= nz * dot
-		let r = 1.0/Math.sqrt(sx*sx+sy*sy+sz*sz)
-		if(Math.abs(r)<1e38){
-			let hv = (ny*sz-nz*sy)*tan2[j] + (nz*sx-nx*sz)*tan2[j+1] + (nx*sy-ny*sx)*tan2[j+2]
-			tan1[j++] = sx*r
-			tan1[j++] = sy*r
-			tan1[j++] = sz*r
-			tan1[j++] = Math.sign(hv)
-		} else {
-			// console.log('skipping', i-3, j, r, [nx,ny,nz], [sx,sy,sz])
-			j+=4;
-		}
-	}
-	return tan1
-}
-
 const linearToSRGB = new Uint8ClampedArray(256)
 for(let i=0;i<256;i++){
 	linearToSRGB[i] = Math.max(269 * Math.pow(i/255, 1.0/2.4) - 14, 0);
@@ -872,251 +501,6 @@ let blas = null
 let matList = null
 let srcGeoData = {}
 let dstGeoData = {}
-
-function mergeGeometry(src,geoData,materials,isNormalMap,needsUVs,needsTangents) {
-	let posSum = 0, idxSum = 0
-	for(let i=0;i<src.length;i++){
-		let srcI = src[i]
-		let geometry = srcI[1]
-		
-		let pos = geometry.attributes.position
-		if(!pos) continue
-		if(needsUVs && !geometry.attributes.uv) continue
-		
-		const index = geometry.index
-		if(index) {
-			let ia = index.array
-			let ic0 = geometry.drawRange.start
-			let ic1 = Math.min(Math.min(index.count, ia.length), ic0 + geometry.drawRange.count)
-			posSum += pos.array.length
-			idxSum += ic1-ic0
-		} else {
-			posSum += pos.array.length
-			idxSum += pos.array.length/3
-		}
-	}
-	if(idxSum == 0 || posSum == 0){ console.log('no data found!'); return; }
-	
-	if(isNormalMap) for(let i=0;i<src.length;i++){
-		if(materials[i]) {
-			needsTangents = true;
-			break;
-		}
-	}
-	
-	// POSs must be shared with parent scope for raytracing
-	POSs = geoData.POSs || new Float32Array(posSum)
-	let NORs = geoData.NORs || new Float32Array(posSum)
-	let TANs = geoData.TANs || (needsTangents ? new Float32Array(posSum/3*4) : null)
-	let UVSs = geoData.UVSs || (window.UVSs = new Float32Array(posSum/3*2))
-	let MATs = geoData.MATs || new Uint16Array(posSum/3)
-	let IDXs = geoData.IDXs || new Uint32Array(idxSum)
-	posSum = 0; idxSum = 0;
-	
-	if(!geoData.done) {
-		for(let k=0;k<src.length;k++){
-			let srcI = src[k]
-			let transform = srcI[0].elements // col-major
-			let geometry = srcI[1]
-			
-			let pos = geometry.attributes.position
-			let uvs = geometry.attributes.uv
-			if(!pos) continue
-			if(needsUVs && !uvs) continue
-			
-			let nor = geometry.attributes.normal
-			let index = geometry.index
-			
-			pos = pos.array
-			nor = nor && nor.array
-			uvs = uvs && uvs.array
-			
-			let idx = index ? index.array : null
-			let ic0 = index ? geometry.drawRange.start : 0
-			let ic1 = index ? Math.min(Math.min(index.count, idx.length), ic0 + geometry.drawRange.count) : pos.length/3
-			
-			let matIdx = k
-			
-			// add data to POSs,NORs,UVSs,MATs,IDXs
-			let matSum = posSum/3
-			let uvsSum = matSum*2
-			let tanSum = matSum*4
-			for(let i=0,j=posSum;i<pos.length;i+=3,j+=3){
-				// apply transform
-				const px = pos[i], py = pos[i+1], pz = pos[i+2]
-				POSs[j  ] = px*transform[0] + py*transform[4] + pz*transform[ 8] + transform[12]
-				POSs[j+1] = px*transform[1] + py*transform[5] + pz*transform[ 9] + transform[13]
-				POSs[j+2] = px*transform[2] + py*transform[6] + pz*transform[10] + transform[14]
-				if(nor) {
-					const nx = nor[i], ny = nor[i+1], nz = nor[i+2]
-					NORs[j  ] = nx*transform[0] + ny*transform[4] + nz*transform[ 8]
-					NORs[j+1] = nx*transform[1] + ny*transform[5] + nz*transform[ 9]
-					NORs[j+2] = nx*transform[2] + ny*transform[6] + nz*transform[10]
-				}
-			}
-			if(uvs) for(let i=0;i<uvs.length;i++){
-				UVSs[uvsSum+i] = uvs[i]
-			}
-			for(let i=matSum,j=i+pos.length/3;i<j;i++){
-				MATs[i] = matIdx
-			}
-			
-			// console.log('calc-tangent?', !!(isNormalMap && uvs && materials[k]), 'by', isNormalMap, uvs, materials[k])
-			if(isNormalMap && uvs && materials[k]){
-				let tan = calculateTangents(pos,nor,uvs,idx,ic0,ic1)
-				// console.log('-> tan:', tan)
-				for(let i=0;i<tan.length;i++){
-					TANs[tanSum+i] = tan[i]
-				}
-			}
-			
-			// copy indices
-			if(index){
-				for(let i=ic0;i<ic1;i++){
-					IDXs[idxSum+i] = idxSum+idx[i]
-				}
-				idxSum += ic1-ic0
-			} else {
-				for(let i=0,l=pos.length/3;i<l;i++){
-					IDXs[idxSum+i] = idxSum+i
-				}
-				idxSum += pos.length/3
-			}
-			
-			posSum += pos.length
-			
-		}
-		geoData = { done: true, POSs, NORs, TANs, UVSs, MATs, IDXs }
-	}
-	return geoData
-}
-
-function unpackVector2(src,idx){
-	if(!src) return
-	let dst = new Float32Array(idx.length*2)
-	for(let i=0,k=0;k<idx.length;){
-		let j=idx[k++]*2
-		dst[i++] = src[j++]
-		dst[i++] = src[j]
-	}
-	return dst
-}
-
-function unpackVector3(src,idx){
-	if(!src) return
-	let dst = new Float32Array(idx.length*3)
-	for(let i=0,k=0;k<idx.length;){
-		let j=idx[k++]*3
-		dst[i++] = src[j++]
-		dst[i++] = src[j++]
-		dst[i++] = src[j]
-	}
-	return dst
-}
-
-function unpackVector4(src,idx){
-	if(!src) return
-	let dst = new Float32Array(idx.length*4)
-	for(let i=0,k=0;k<idx.length;){
-		let j=idx[k++]*4
-		dst[i++] = src[j++]
-		dst[i++] = src[j++]
-		dst[i++] = src[j++]
-		dst[i++] = src[j]
-	}
-	return dst
-}
-
-function unpackVector2V2(src,idx,tris){
-	if(!src) return
-	let dst = new Float32Array(tris.length*6)
-	let i=0,k=0;
-	for(;k<tris.length;){
-		let tri = tris[k++]
-		let ai=tri[TRIS_ABC_IDX]*2, bi=tri[TRIS_ABC_IDX+1]*2, ci=tri[TRIS_ABC_IDX+2]*2
-		dst[i++] = src[ai++]
-		dst[i++] = src[ai]
-		dst[i++] = src[bi++]
-		dst[i++] = src[bi]
-		dst[i++] = src[ci++]
-		dst[i++] = src[ci]
-	}
-	return dst
-}
-
-function unpackVector3V2(src,idx,tris){
-	if(!src) return
-	let dst = new Float32Array(tris.length*9)
-	let i=0,k=0;
-	for(;k<tris.length;){
-		let tri = tris[k++]
-		let ai=tri[TRIS_ABC_IDX]*3, bi=tri[TRIS_ABC_IDX+1]*3, ci=tri[TRIS_ABC_IDX+2]*3
-		// console.log(k-1,'->',ai/3,bi/3,ci/3)
-		dst[i++] = src[ai++]
-		dst[i++] = src[ai++]
-		dst[i++] = src[ai]
-		dst[i++] = src[bi++]
-		dst[i++] = src[bi++]
-		dst[i++] = src[bi]
-		dst[i++] = src[ci++]
-		dst[i++] = src[ci++]
-		dst[i++] = src[ci]
-	}
-	return dst
-}
-
-function unpackVector4V2(src,idx,tris){
-	if(!src) return
-	let dst = new Float32Array(tris.length*12)
-	let i=0,k=0;
-	for(;k<tris.length;){
-		let tri = tris[k++]
-		let ai=tri[TRIS_ABC_IDX]*4, bi=tri[TRIS_ABC_IDX+1]*4, ci=tri[TRIS_ABC_IDX+2]*4
-		dst[i++] = src[ai++]
-		dst[i++] = src[ai++]
-		dst[i++] = src[ai++]
-		dst[i++] = src[ai]
-		dst[i++] = src[bi++]
-		dst[i++] = src[bi++]
-		dst[i++] = src[bi++]
-		dst[i++] = src[bi]
-		dst[i++] = src[ci++]
-		dst[i++] = src[ci++]
-		dst[i++] = src[ci++]
-		dst[i++] = src[ci]
-	}
-	return dst
-}
-
-function unpackGeometryByIndices(src){
-	// first check whether it's necessary
-	let idx = src.IDXs
-	let good = true
-	for(let i=0;i<idx.length;i++){
-		if(idx[i] != i){
-			good = false
-			break;
-		}
-	}
-	if(good) return src
-	console.log('unpacking')
-	return {
-		POSs: unpackVector3(src.POSs,idx),
-		NORs: unpackVector3(src.NORs,idx),
-		TANs: unpackVector4(src.TANs,idx),
-		UVSs: unpackVector2(src.UVSs,idx),
-	}
-}
-
-function unpackGeometryByIndicesV2(src,tris){
-	let idx = src.IDXs
-	return {
-		POSs: unpackVector3V2(src.POSs,idx,tris),
-		NORs: unpackVector3V2(src.NORs,idx,tris),
-		TANs: unpackVector4V2(src.TANs,idx,tris),
-		UVSs: unpackVector2V2(src.UVSs,idx,tris),
-	}
-}
 
 function finishTexture(imageData){
 	const texture = new THREE.Texture(imageData)
@@ -1177,7 +561,7 @@ function bake1(materials,thisSession) {
 		return;
 	}
 	
-	const POSs = srcGeoData.POSs
+	const POSs = window.POSs = srcGeoData.POSs
 	const NORs = srcGeoData.NORs
 	const UVSs = srcGeoData.UVSs
 	const TANs = srcGeoData.TANs
@@ -1189,7 +573,7 @@ function bake1(materials,thisSession) {
 	blas = blas || buildBLAS(POSs,IDXs)
 	const root = blas[0]
 	const bounds = root[0]
-	tris = blas[1]
+	const tris = blas[1]
 	
 	console.log(-lastTime+(lastTime=Date.now()), 'building BLAS')
 	
@@ -1325,8 +709,8 @@ function bake1(materials,thisSession) {
 								ray[RAY_SCORE] = maxDelta
 								
 								// raytrace
-								printTrace = false // x == 4 && y == 0
-								trace(root,ray)
+								window.printTrace = false // x == 4 && y == 0
+								trace(tris,root,ray)
 								
 								const dist = ray[RAY_SCORE]
 								const hit = dist < maxDelta
@@ -1575,40 +959,31 @@ resetButton.onclick = () => {
 new Loader((s) => process(s,0)).loadPath(file0)
 new Loader((s) => process(s,1)).loadPath(file1)
 window.THREE = THREE
-if(1){
-	let bgImg = new Image()
-	bgImg.onload = function(){
-		resCanvas1.width=bgImg.width
-		resCanvas1.height=bgImg.height
-		resCtx1.drawImage(bgImg,0,0)
-		let data = resCtx1.getImageData(0,0,bgImg.width,bgImg.height)
-		let rgba = data.data, w = data.width, h = data.height
-		let floats = new Float32Array(w*h*3)
-		let max = 255.5, invMax = 1.0/max
-		for(let i=0,j=0,l=w*h*4;i<l;i+=4,j+=3){
-			let r = rgba[i]*invMax, g = rgba[i+1]*invMax, b = rgba[i+2]*invMax
-			r = r*r; g = g*g; b = b*b; // srgb -> linear
-			r /= 1-r; g /= 1-g; b /= 1-b;
-			floats[j] = r; floats[j+1] = g; floats[j+2] = b;
-		}
-		// we could use half floats, too :)
-		let texture = new THREE.DataTexture(floats,w,h,THREE.RGBFormat,THREE.FloatType)
-		texture.mapping = THREE.EquirectangularReflectionMapping
-		texture.flipY = true
-		scenes[0].environment = texture
-		scenes[1].environment = texture
+
+let bgImg = new Image()
+bgImg.onload = function(){
+	resCanvas1.width=bgImg.width
+	resCanvas1.height=bgImg.height
+	resCtx1.drawImage(bgImg,0,0)
+	let data = resCtx1.getImageData(0,0,bgImg.width,bgImg.height)
+	let rgba = data.data, w = data.width, h = data.height
+	let floats = new Float32Array(w*h*3)
+	let max = 255.5, invMax = 1.0/max
+	for(let i=0,j=0,l=w*h*4;i<l;i+=4,j+=3){
+		let r = rgba[i]*invMax, g = rgba[i+1]*invMax, b = rgba[i+2]*invMax
+		r = r*r; g = g*g; b = b*b; // srgb -> linear
+		r /= 1-r; g /= 1-g; b /= 1-b;
+		floats[j] = r; floats[j+1] = g; floats[j+2] = b;
 	}
-	bgImg.src = 'env/scythian_tombs_2_4k_30.webp'
-} else {
-	new RGBELoader()
-		.load('env/scythian_tombs_2_1k.hdr', function ( texture ) {
-			// todo we need to unpack the data
-			console.log(texture)
-			texture.mapping = THREE.EquirectangularReflectionMapping;
-			scenes[0].environment = texture
-			scenes[1].environment = texture
-		});
+	// we could use half floats, too :)
+	let texture = new THREE.DataTexture(floats,w,h,THREE.RGBFormat,THREE.FloatType)
+	texture.mapping = THREE.EquirectangularReflectionMapping
+	texture.flipY = true
+	scenes[0].environment = texture
+	scenes[1].environment = texture
 }
+bgImg.src = 'env/scythian_tombs_2_4k_30.webp'
+
 
 let gl = resCtx2
 let flatBuffer = null
