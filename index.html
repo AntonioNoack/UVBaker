@@ -73,8 +73,11 @@
 				<option value="4096">4096 px</option>
 			</select>
 		</div>
-			<div id="sampleUIContainer" style="display:none;margin-top: 0.4em;" class="select-container">
-				<label  class="select-title" for="samples">Samples:</label>
+		<div class="select-container" style="margin-top: 0.6em;">
+			<label class="select-title" for="spread">Spread:</label>
+			<input class="select-box" id="spreadUI" name="spread" checked type="checkbox" style="width:1.5em;height:1.5em;"></input>
+			<div id="sampleUIContainer" style="display:none;">
+				<label class="select-title" for="samples">Samples:</label>
 				<select class="select-box" name="samples" id="sampleUI">
 					<option selected value="32">32</option>
 					<option value="64">64</option>
@@ -86,6 +89,7 @@
 					<option value="4096">4096</option>
 				</select>
 			</div>
+		</div>
 		<hr>
 		<div class="select-container">
 			<button class="button" id="exeButton">Calculate</button>

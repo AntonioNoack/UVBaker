@@ -122,8 +122,6 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 				const cx = (UVSd[ci2d  ]-us) * w - 0.5
 				const cy = (UVSd[ci2d+1]-vs) * h - 0.5
 				
-				// console.log(u0,v0,ax,ay,bx,by,cx,cy)
-				
 				const xmin = Math.max(0,  Math.floor(Math.min(ax,bx,cx)))
 				const ymin = Math.max(0,  Math.floor(Math.min(ay,by,cy)))
 				const xmax = Math.min(w-1,Math.ceil( Math.max(ax,bx,cx)))
@@ -250,11 +248,11 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 												nx = nx1 + dx
 												ny = ny1 + dy
 												nz = nz1 + dz
-												let nls = 1.0/Math.sqrt(nx*nx+ny*ny+nz*nz)
-												nx *= nls; ny *= nls; nz *= nls;
 												// check if that direction overlaps with the geometry -> easy dismiss
 												if(nx*nxz + ny*nyz + nz*nzz > 0.0) {
-													prepareRay(ray,px,py,pz,nx,ny,nz,maxDistance)
+													let nls = 1.0/Math.sqrt(nx*nx+ny*ny+nz*nz)
+													nx *= nls; ny *= nls; nz *= nls;
+													prepareRay(ray,px,py,pz,nx,ny,nz,maxDistance*1e6) // *1e6, so we get sum += 0, not 0.01
 													traceSigned(tris,root,ray)
 													let dist = ray[RAY_SCORE]
 													sum += dist / (dist + dist0)
@@ -262,7 +260,7 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 											}
 											
 											// write average
-											sum *= 255/numSamples
+											sum *= 255.49/numSamples
 											image[q  ] = sum
 											image[q+1] = image[q]
 											image[q+2] = image[q]
@@ -351,7 +349,8 @@ function raytraceOnCPU(w, h, src, dst, materials, thisSession, startTime, lastTi
 		if(session != thisSession) return;
 		let done = true
 		let t0 = Date.now()
-		for(let z=0;z<16;z++) {
+		let maxIter = spreadUI.checked ? 16 : 0
+		for(let z=0;z<maxIter;z++) {
 			done = true
 			for(let y=0,i4=0;y<h;y++){
 				for(let x=0;x<w;x++,i4+=4){

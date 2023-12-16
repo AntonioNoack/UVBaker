@@ -90,13 +90,13 @@ vec3 safeMin(vec3 a, vec3 b){ return vec3(safeMin(a.x,b.x),safeMin(a.y,b.y),safe
 vec3 safeMax(vec3 a, vec3 b){ return vec3(safeMax(a.x,b.x),safeMax(a.y,b.y),safeMax(a.z,b.z)); }
 float minComp(vec3 v){ return min(v.x,min(v.y,v.z)); }
 float maxComp(vec3 v){ return max(v.x,max(v.y,v.z)); }
-bool aabbHitsRay(vec3 bMin, vec3 bMax){
+bool aabbHitsRay(vec3 bMin, vec3 bMax, float z0, float z1){
 	bvec3 neg   = lessThan(rd, vec3(0.0));
 	vec3  close = mix(bMin,bMax,neg);
 	vec3  far3  = mix(bMax,bMin,neg);
 	float tMin  = maxComp((close-pos)*rd);
 	float tMax  = minComp((far3-pos)*rd);
-	return max(tMin, -far) <= min(tMax, far);
+	return max(tMin, z0) <= min(tMax, z1);
 }
 float pointInOrOn(vec3 p1, vec3 p2, vec3 a, vec3 b){
 	vec3 ba  = b-a;
@@ -104,11 +104,14 @@ float pointInOrOn(vec3 p1, vec3 p2, vec3 a, vec3 b){
 	vec3 cp2 = cross(ba, p2 - a);
 	return dot(cp1, cp2);
 }
-bool intersectTriangle(vec3 p0, vec3 p1, vec3 p2, inout vec3 weights){
+bool intersectTriangle(vec3 p0, vec3 p1, vec3 p2, inout vec3 weights, bool signed){
 	vec3 N = cross(p1-p0, p2-p0);
 	float dnn = dot(dir, N);
 	if(dnn <= 0.0) return false;
 	float distance = dot(p0-pos, N) / dnn;
+	if(distance < 0.0 && signed) {
+		return false;
+	}
 	vec3 px = pos + dir * distance;
 	distance = abs(distance);
 	if(distance < far){
@@ -124,16 +127,16 @@ bool intersectTriangle(vec3 p0, vec3 p1, vec3 p2, inout vec3 weights){
 	return false;
 }
 
-uniform bool isSingleChannel, isNormalMap, isColor;
+uniform bool isSingleChannel, isNormalMap, isColor, isAO;
 uniform vec4 channelMask;
 uniform vec4 tint;
-uniform uint numTris, numNodes;
+uniform uint numTris, numNodes, numSamples;
 uniform vec2 depthScale;
 
 uniform sampler2D dataTex;
 uniform sampler2D posTex, blasTex, norTex, uvsTex, tanTex;
 
-void trace(vec3 pos0, vec3 dir0, out ivec2 bestXY, out vec3 weights) {
+void trace(vec3 pos0, vec3 dir0, out ivec2 bestXY, out vec3 weights, bool signed) {
 	
 	pos = pos0;
 	dir = dir0;
@@ -157,7 +160,7 @@ void trace(vec3 pos0, vec3 dir0, out ivec2 bestXY, out vec3 weights) {
 		uint nodeX = pixelIndex - nodeY * nodeTexSize;
 		vec4 d0 = texelFetch(blasTex,ivec2(nodeX,   nodeY),0);
 		vec4 d1 = texelFetch(blasTex,ivec2(nodeX+1u,nodeY),0);
-		if(aabbHitsRay(d0.xyz,d1.xyz)){
+		if(aabbHitsRay(d0.xyz,d1.xyz,signed ? 0.0 : -far,far)){
 			uvec2 v01 = uvec2(d0.w,d1.w);
 			if(v01.x < 3u){
 				if(rd[v01.x] > 0.0){
@@ -178,7 +181,7 @@ void trace(vec3 pos0, vec3 dir0, out ivec2 bestXY, out vec3 weights) {
 					vec3 p0 = texelFetch(posTex,uv0,0).xyz;
 					vec3 p1 = texelFetch(posTex,uv1,0).xyz;
 					vec3 p2 = texelFetch(posTex,uv2,0).xyz;
-					if(intersectTriangle(p0, p1, p2, weights)){
+					if(intersectTriangle(p0, p1, p2, weights, signed)){
 						bestXY = ivec2(triX, triY);
 					}
 					triX += 3u;
@@ -196,12 +199,30 @@ void trace(vec3 pos0, vec3 dir0, out ivec2 bestXY, out vec3 weights) {
 	}
 }
 
+#define GOLDEN_ANGLE 2.399963229728653
+vec3 fibSphere(uint i, uint n){
+	float y = 1.0 - float(i) * 2.0 / float(n-1u);
+	float r = sqrt(1.0-y*y);
+	float t = GOLDEN_ANGLE * float(i);
+	return vec3(cos(t)*r,y,sin(t)*r);
+}
+
+int nextRandI1(int i){
+	return 11-i*554899859;
+}
+
+float nextRandF1(inout int i){
+	float v = float(i&16777215)/16777215.0;
+	i = nextRandI1(i);
+	return v;
+}
+
 void main(){
 	
 	ivec2 bestXY;
 	vec3 weights;
 	
-	trace(dstCoord, normalize(dstNormal), bestXY, weights);
+	trace(dstCoord, normalize(dstNormal), bestXY, weights, false);
 	
 	if(far >= depthScale.y) discard;
 	
@@ -221,6 +242,7 @@ void main(){
 			texelFetch(norTex,uv1,0).xyz * weights.y + 
 			texelFetch(norTex,uv2,0).xyz * weights.z;
 		srcNormal = normalize(srcNormal);
+		vec3 srcNormal0 = srcNormal;
 		
 		vec3 dstNormal1 = normalize(dstNormal);
 			
@@ -244,18 +266,52 @@ void main(){
 			srcNormal = mat3(srcTangent1,srcBitangent,srcNormal) * srcNormalMap;
 		}
 		
-		// transform srcNormal into tangent space
-		vec3 dstTangent1 = dstTangent.xyz;
-		dstTangent1 -= dstNormal1 * dot(dstNormal1,dstTangent1);
-		if(dot(dstTangent1,dstTangent1)>0.0) dstTangent1=normalize(dstTangent1);
-		
-		vec3 dstBitangent = sign(dstTangent.w) * cross(dstNormal1,dstTangent1);
-		if(dot(dstBitangent,dstBitangent)>0.0) dstBitangent=normalize(dstBitangent);
-		
-		srcNormal = srcNormal * mat3(dstTangent1,dstBitangent,dstNormal1);
-		float l2 = dot(srcNormal,srcNormal);
-		result.xyz = l2>0.0 ? (srcNormal)/sqrt(l2)*.5+.5 : vec3(0.5,0.5,1.0);
-		result.a = 1.0;
+		if(isAO){
+			
+			srcNormal = normalize(srcNormal);
+			
+			float sum = 0.0, dist0 = depthScale.y * 0.01;
+			pos += far * dir + (1e-6 * depthScale.y) * srcNormal;
+			
+			int seed = int(gl_FragCoord.x) + int(gl_FragCoord.y) << 16;
+			for(int i=0;i<16;i++) seed = nextRandI1(seed);
+			
+			for(uint si=0u;si<numSamples;si++){
+				// generate random direction
+				vec3 randomDir = vec3(1.0);
+				for(int i=0;dot(randomDir,randomDir)>0.99 && i<8;i++){
+					randomDir = vec3(nextRandF1(seed),nextRandF1(seed),nextRandF1(seed))*2.0-1.0;
+				}
+				vec3 sampleDir = srcNormal + randomDir;
+				// check if that direction overlaps with the geometry -> easy dismiss
+				if(dot(sampleDir,srcNormal0) > 0.0){
+					// trace a ray
+					far = 1e6 * depthScale.y;
+					trace(pos, normalize(sampleDir), bestXY, weights, true);
+					// accumulate based on hit distance
+					sum += far / (far + dist0);
+				}
+			}
+			
+			// write average
+			result.xyz = vec3(sum / float(numSamples));
+			result.a = 1.0;
+			
+		} else {
+			
+			// transform srcNormal into tangent space
+			vec3 dstTangent1 = dstTangent.xyz;
+			dstTangent1 -= dstNormal1 * dot(dstNormal1,dstTangent1);
+			if(dot(dstTangent1,dstTangent1)>0.0) dstTangent1=normalize(dstTangent1);
+			
+			vec3 dstBitangent = sign(dstTangent.w) * cross(dstNormal1,dstTangent1);
+			if(dot(dstBitangent,dstBitangent)>0.0) dstBitangent=normalize(dstBitangent);
+			
+			srcNormal = srcNormal * mat3(dstTangent1,dstBitangent,dstNormal1);
+			float l2 = dot(srcNormal,srcNormal);
+			result.xyz = l2>0.0 ? (srcNormal)/sqrt(l2)*.5+.5 : vec3(0.5,0.5,1.0);
+			result.a = 1.0;
+		}
 		
 	} else {
 		result = texture(dataTex,srcUV,0.0) * tint;
@@ -441,6 +497,7 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 	gl.uniform2f(gl.getUniformLocation(rtShader,'depthScale'), 1.0/maxDistance, maxDistance)
 	gl.uniform1i(gl.getUniformLocation(rtShader,'isNormalMap'),layer.isNormalMap?1:0)
 	gl.uniform1i(gl.getUniformLocation(rtShader,'isColor'),layer.sRGB?1:0)
+	gl.uniform1i(gl.getUniformLocation(rtShader,'isAO'),layer.isAO?1:0)
 	
 	for(let srcIndex=0;srcIndex<src.length;srcIndex++){
 		
@@ -539,6 +596,8 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 			// bind uniforms
 			gl.uniform1ui(gl.getUniformLocation(rtShader,'numTris'),srcLength)
 			gl.uniform1ui(gl.getUniformLocation(rtShader,'numNodes'),numNodes)
+			gl.uniform1ui(gl.getUniformLocation(rtShader,'numSamples'),sampleUI.value || 1)
+			
 			
 			// draw dst
 			gl.bindFramebuffer(gl.FRAMEBUFFER,fb0.fb)
@@ -654,18 +713,15 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 			if(idx) gl.uniform1i(loc,idx)
 			gl.activeTexture(gl.TEXTURE0 + idx)
 			gl.bindTexture(gl.TEXTURE_2D,tex)
-			// console.log('bound ' + name + ' :)')
-		}// else console.log('missing ' + name, tex, idx)
+		}
 	}
 	
 	// spread image on GPU as well :), should be much faster
-	
-	
 	const pixels = new Uint8ClampedArray(glw*glh*4)
 	gl.readPixels(0,0,glw,glh,gl.RGBA,gl.UNSIGNED_BYTE,pixels)
 	
 	let hasData = false
-	if(1) for(let j=3,k=pixels.length;j<k;j+=4){
+	for(let j=3,k=pixels.length;j<k;j+=4){
 		if(pixels[j] > 0){
 			hasData = true
 			break
@@ -680,7 +736,7 @@ function raytraceOnGPU(glw,glh,src,dst,materials) {
 		gl.uniform2f(gl.getUniformLocation(spreadShader,'duv'), spreadFactor/glw,spreadFactor/glh)
 		bindBuffer(gl.getAttribLocation(spreadShader,'uvs'),2,flatBuffer)
 		
-		let maxIterations = glw / (1.5 * spreadFactor)
+		let maxIterations = spreadUI.checked ? glw / (1.5 * spreadFactor) : 0
 		let testPeriod = Math.min(64, maxIterations)
 		let testMask = testPeriod-1
 		maxIterations -= maxIterations % testPeriod
