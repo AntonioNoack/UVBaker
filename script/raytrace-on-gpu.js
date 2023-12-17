@@ -207,16 +207,6 @@ vec3 fibSphere(uint i, uint n){
 	return vec3(cos(t)*r,y,sin(t)*r);
 }
 
-int nextRandI1(int i){
-	return 11-i*554899859;
-}
-
-float nextRandF1(inout int i){
-	float v = float(i&16777215)/16777215.0;
-	i = nextRandI1(i);
-	return v;
-}
-
 void main(){
 	
 	ivec2 bestXY;
@@ -271,17 +261,11 @@ void main(){
 			srcNormal = normalize(srcNormal);
 			
 			float sum = 0.0, dist0 = depthScale.y * 0.01;
-			pos += far * dir + (1e-6 * depthScale.y) * srcNormal;
-			
-			int seed = int(gl_FragCoord.x) + int(gl_FragCoord.y) << 16;
-			for(int i=0;i<16;i++) seed = nextRandI1(seed);
+			pos += far * dir + (1e-4 * depthScale.y) * srcNormal;
 			
 			for(uint si=0u;si<numSamples;si++){
 				// generate random direction
-				vec3 randomDir = vec3(1.0);
-				for(int i=0;dot(randomDir,randomDir)>0.99 && i<8;i++){
-					randomDir = vec3(nextRandF1(seed),nextRandF1(seed),nextRandF1(seed))*2.0-1.0;
-				}
+				vec3 randomDir = fibSphere(si,numSamples) * fract(sin(float(si)) * 45213.5);
 				vec3 sampleDir = srcNormal + randomDir;
 				// check if that direction overlaps with the geometry -> easy dismiss
 				if(dot(sampleDir,srcNormal0) > 0.0){

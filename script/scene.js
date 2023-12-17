@@ -201,7 +201,7 @@ function camSetup(model, controls, camera){
 	controls.minPolarAngle = 0
 	controls.maxPolarAngle = Math.PI
 	camera.near = dist * 0.001
-	camera.far = dist * 3.0
+	camera.far = dist * 6.0 // twice, so the object is fully visible
 }
 
 function loadReflectionMap(scenes){
